@@ -1,6 +1,8 @@
 using System;
 using System.ComponentModel;
 using System.Drawing;
+using System.Runtime.InteropServices;
+using System.Security;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Forms.Integration;
@@ -20,20 +22,21 @@ public sealed class SessionView : UserControl, IDisposable
     private AxMsRdpClient9NotSafeForScripting? _client;
     private PixelSize _desktop;
     private PixelSize? _lastRequestedSize;
-    private string? _password;
+    private SecureString _password = new();
+    private bool _reconnectQueued;
     private bool _initialized;
     private bool _loggedIn;
     private bool _disposed;
     private readonly bool _connectOnLoad;
 
-    public ConnectionProfile Profile { get; }
+    public ConnectionProfile Profile { get; private set; }
     public string Status { get; private set; } = "Preparing session";
     public event EventHandler? StatusChanged;
 
     public SessionView(ConnectionProfile profile, string password, bool connectOnLoad = true)
     {
         Profile = profile;
-        _password = password;
+        RememberPassword(password);
         _connectOnLoad = connectOnLoad;
         _desktop = new(profile.DesktopWidth, profile.DesktopHeight);
         Content = _host;
@@ -47,34 +50,42 @@ public sealed class SessionView : UserControl, IDisposable
     {
         if (_initialized || _disposed) return;
         _initialized = true;
+        InitializeClient();
+    }
+
+    private void InitializeClient()
+    {
         try
         {
             Profile.Validate();
-            _client = new AxMsRdpClient9NotSafeForScripting();
+            var client = new AxMsRdpClient9NotSafeForScripting();
+            _client = client;
             ((ISupportInitialize)_client).BeginInit();
             _panel.Controls.Add(_client);
             ((ISupportInitialize)_client).EndInit();
             _client.CreateControl();
 
-            _client.OnConnected += (_, _) => SetStatus("Connected; signing in…");
+            _client.OnConnected += (_, _) => { if (_client == client) SetStatus("Connected; signing in…"); };
             _client.OnLoginComplete += (_, _) =>
             {
+                if (_client != client || _disposed) return;
                 _loggedIn = true;
                 SetStatus(DisplayDescription());
                 QueueResize();
             };
             _client.OnDisconnected += (_, args) =>
             {
+                if (_client != client || _disposed) return;
                 _loggedIn = false;
                 _resizeTimer.Stop();
                 if (_disposed) return;
                 string reason = _client.GetErrorDescription((uint)args.discReason, (uint)_client.ExtendedDisconnectReason);
                 SetStatus($"Disconnected: {reason} ({args.discReason})");
             };
-            _client.OnFatalError += (_, args) => SetStatus($"RDP error {args.errorCode}");
+            _client.OnFatalError += (_, args) => { if (_client == client) SetStatus($"RDP error {args.errorCode}"); };
             _client.OnRemoteDesktopSizeChange += (_, args) =>
             {
-                if (args.width <= 0 || args.height <= 0 || _disposed) return;
+                if (_client != client || args.width <= 0 || args.height <= 0 || _disposed) return;
                 _desktop = new(args.width, args.height);
                 LayoutClient();
                 if (_loggedIn) SetStatus(DisplayDescription());
@@ -97,6 +108,7 @@ public sealed class SessionView : UserControl, IDisposable
                 ((MSTSCLib.IMsRdpExtendedSettings)_client.GetOcx()!).set_Property("EnableZoom", ref enableZoom);
             }
             _client.AdvancedSettings7.EnableCredSspSupport = true;
+            _client.AdvancedSettings7.ConnectToAdministerServer = Profile.AdministrativeSession;
             _client.AdvancedSettings5.AuthenticationLevel = 2;
             _client.AdvancedSettings6.RedirectClipboard = Profile.RedirectClipboard;
             _client.AdvancedSettings2.RedirectDrives = false;
@@ -105,8 +117,12 @@ public sealed class SessionView : UserControl, IDisposable
             _client.AdvancedSettings3.MaxReconnectAttempts = 5;
             _client.SecuredSettings2.KeyboardHookMode = Profile.RedirectWindowsKeys ? 1 : 0;
             _client.SecuredSettings2.AudioRedirectionMode = 2;
-            if (!string.IsNullOrEmpty(_password)) _client.AdvancedSettings2.ClearTextPassword = _password;
-            _password = null;
+            if (_password.Length > 0)
+            {
+                var secret = Marshal.SecureStringToBSTR(_password);
+                try { _client.AdvancedSettings2.ClearTextPassword = Marshal.PtrToStringBSTR(secret); }
+                finally { Marshal.ZeroFreeBSTR(secret); }
+            }
 
             if (Profile.Kind == ConnectionKind.HyperV)
             {
@@ -134,8 +150,49 @@ public sealed class SessionView : UserControl, IDisposable
         }
         catch (Exception ex)
         {
-            _password = null;
             SetStatus($"Cannot start session: {ex.Message}");
+        }
+    }
+
+    private void RememberPassword(string password)
+    {
+        _password.Dispose();
+        _password = new SecureString();
+        foreach (char character in password) _password.AppendChar(character);
+        _password.MakeReadOnly();
+    }
+
+    public void Reconnect(ConnectionProfile settings, string? savedPassword = null)
+    {
+        if (_disposed || _reconnectQueued || _client?.Connected == 2) return;
+        settings.Validate();
+        if (savedPassword is not null) RememberPassword(savedPassword);
+        else if (settings.UserName != Profile.UserName || settings.Domain != Profile.Domain) RememberPassword("");
+        Profile = settings;
+        _reconnectQueued = true;
+        _loggedIn = false;
+        _resizeTimer.Stop();
+        SetStatus("Reconnecting…");
+        DisposeClient();
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _reconnectQueued = false;
+            if (!_disposed) InitializeClient();
+        }), DispatcherPriority.Background);
+    }
+
+    private void DisposeClient()
+    {
+        var client = _client;
+        _client = null;
+        if (client is null) return;
+        try { if (client.Connected != 0) client.Disconnect(); }
+        catch (COMException) { }
+        catch (Forms.AxHost.InvalidActiveXStateException) { }
+        finally
+        {
+            _panel.Controls.Remove(client);
+            client.Dispose();
         }
     }
 
@@ -232,14 +289,14 @@ public sealed class SessionView : UserControl, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _password = null;
+        _password.Dispose();
         _resizeTimer.Stop();
         _resizeTimer.Tick -= ResizeRemoteDesktop;
         Loaded -= OnLoaded;
         _panel.Resize -= PanelResized;
         try
         {
-            if (_client?.Connected != 0) _client?.Disconnect();
+            DisposeClient();
         }
         catch (System.Runtime.InteropServices.COMException) { }
         finally

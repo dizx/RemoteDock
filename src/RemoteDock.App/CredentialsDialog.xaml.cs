@@ -7,6 +7,7 @@ public partial class CredentialsDialog : Window
 {
     public string UserName => UserBox.Text.Trim();
     public string Domain => DomainBox.Text.Trim();
+    public bool RememberPassword => RememberBox.IsChecked == true;
 
     public CredentialsDialog(ConnectionProfile profile)
     {
@@ -24,5 +25,13 @@ public partial class CredentialsDialog : Window
         return password;
     }
 
-    private void Connect_Click(object sender, RoutedEventArgs e) => DialogResult = true;
+    private void Connect_Click(object sender, RoutedEventArgs e)
+    {
+        if (RememberPassword && PasswordInput.Password.Length == 0)
+        {
+            ErrorText.Text = "Enter a password to save, or uncheck the saved-password option.";
+            return;
+        }
+        DialogResult = true;
+    }
 }

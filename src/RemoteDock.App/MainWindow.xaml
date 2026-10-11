@@ -12,7 +12,7 @@
     <Border x:Name="Toolbar" Background="#0B1018" BorderBrush="#253343" BorderThickness="0,0,0,1" Padding="16,9">
       <DockPanel>
         <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
-          <Button Content="Reconnect" Click="Reconnect_Click" ToolTip="Reconnect the active session" />
+          <Button x:Name="ReconnectButton" Content="Reconnect" IsEnabled="False" Click="Reconnect_Click" ToolTip="Reconnect the active session with its credentials" />
           <Button x:Name="FocusButton" Content="Focus Mode" Click="Focus_Click" ToolTip="Hide navigation and tabs · Ctrl+Shift+F when local UI has focus" />
           <Button x:Name="FullscreenButton" Content="Full screen" Click="Fullscreen_Click" ToolTip="F11 when local UI has focus" />
         </StackPanel>
@@ -36,15 +36,26 @@
         <TextBlock x:Name="FocusTitle" VerticalAlignment="Center" Text="RemoteDock" TextTrimming="CharacterEllipsis" />
       </DockPanel>
     </Border>
-    <Grid Grid.Row="2">
+    <Grid x:Name="Workspace" Grid.Row="2" SizeChanged="Workspace_SizeChanged">
       <Grid.ColumnDefinitions><ColumnDefinition x:Name="SidebarColumn" Width="260" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-      <Border x:Name="Sidebar" Background="{StaticResource Surface}" BorderBrush="#304055" BorderThickness="0,1,1,0">
+      <Border x:Name="SidebarRail" Background="{StaticResource Surface}" Visibility="Collapsed" MouseEnter="RevealSidebar">
+        <Button x:Name="SidebarRevealButton" Content="Connections" Padding="5" Margin="0" Click="RevealSidebar"
+                GotKeyboardFocus="RevealSidebar" ToolTip="Show connections">
+          <Button.LayoutTransform><RotateTransform Angle="-90" /></Button.LayoutTransform>
+        </Button>
+      </Border>
+      <ContentControl x:Name="SidebarDockHost">
+      <Border x:Name="Sidebar" Background="{StaticResource Surface}" BorderBrush="#304055" BorderThickness="0,1,1,0"
+              MouseEnter="Sidebar_MouseEnter" MouseLeave="Sidebar_MouseLeave" LostKeyboardFocus="Sidebar_LostKeyboardFocus">
         <DockPanel Margin="14">
           <StackPanel DockPanel.Dock="Top">
             <TextBlock Text="CONNECTIONS" FontWeight="SemiBold" Foreground="#A9BBCD" Margin="0,8,0,12" />
+            <CheckBox x:Name="AutoHideBox" Content="Auto-hide panel" Click="AutoHide_Click" />
             <TextBlock Text="Search connections" Foreground="#A9BBCD" FontSize="11" />
             <TextBox x:Name="SearchBox" TextChanged="Search_Changed" ToolTip="Search by connection name or host" AutomationProperties.Name="Search connections" />
-            <Button Content="+ New connection" Click="New_Click" Margin="0,0,0,12" HorizontalContentAlignment="Left" />
+            <Button Content="+ New connection" Click="New_Click" Margin="0,0,0,4" HorizontalContentAlignment="Left" />
+            <Button Content="+ New group" Click="NewGroup_Click" Margin="0,0,0,12" HorizontalContentAlignment="Left" />
+            <Button x:Name="ImportButton" Content="Import connections…" Click="Import_Click" Margin="0,0,0,12" />
           </StackPanel>
           <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
             <Button Content="Connect" Click="Connect_Click" Margin="0,3" />
@@ -53,20 +64,26 @@
               <Button Content="Delete" Click="Delete_Click" />
             </StackPanel>
           </StackPanel>
-          <ListBox x:Name="ConnectionsList" Background="Transparent" Foreground="White" BorderThickness="0"
-                   MouseDoubleClick="Connection_DoubleClick" KeyDown="Connection_KeyDown"
+          <TreeView x:Name="ConnectionsList" Background="Transparent" Foreground="White" BorderThickness="0"
+                   MouseDoubleClick="Connection_DoubleClick" KeyDown="Connection_KeyDown" SelectedItemChanged="Connection_Selected"
+                   PreviewMouseRightButtonDown="Connection_RightClick"
                    ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="Saved connections">
-            <ListBox.ItemTemplate>
-              <DataTemplate>
-                <StackPanel Margin="4,8">
-                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                  <TextBlock Text="{Binding Host}" FontSize="11" Foreground="#91A5BB" TextTrimming="CharacterEllipsis" />
-                </StackPanel>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
+            <TreeView.ContextMenu>
+              <ContextMenu>
+                <MenuItem Header="Connect" Click="Connect_Click" />
+                <MenuItem Header="Connect as…" Click="ConnectAs_Click" />
+                <Separator />
+                <MenuItem Header="Edit" Click="Edit_Click" />
+                <MenuItem Header="Delete" Click="Delete_Click" />
+                <Separator />
+                <MenuItem Header="New connection" Click="New_Click" />
+                <MenuItem Header="New group" Click="NewGroup_Click" />
+              </ContextMenu>
+            </TreeView.ContextMenu>
+          </TreeView>
         </DockPanel>
       </Border>
+      </ContentControl>
       <Grid Grid.Column="1">
         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
         <ListBox x:Name="Tabs" Background="#101722" Foreground="White" BorderThickness="0" MinHeight="40"
@@ -77,14 +94,16 @@
         <Grid x:Name="SessionSurface" Grid.Row="1" Background="#0B1018" ClipToBounds="True">
           <StackPanel x:Name="Welcome" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="440" Margin="32">
             <TextBlock Text="Room for the remote." FontSize="32" FontWeight="SemiBold" />
-            <TextBlock Text="Connect to a Windows desktop or Hyper-V console. Fit your workspace with fewer remote pixels and more room to work."
+            <TextBlock x:Name="WelcomeDescription" Text="Connect to a Windows desktop or Hyper-V console. Fit your workspace with fewer remote pixels and more room to work."
                        TextWrapping="Wrap" Foreground="#A9BBCD" FontSize="16" Margin="0,16,0,24" />
-            <Button Content="Add your first connection" Click="New_Click" HorizontalAlignment="Left" />
+            <Button x:Name="WelcomeAction" Content="Add your first connection" Click="Welcome_Click" HorizontalAlignment="Left" />
             <TextBlock Text="Scaled Fit · 1/2 resolution · adapts as you resize" Foreground="#7CC9D4" Margin="3,18,0,0" />
           </StackPanel>
         </Grid>
       </Grid>
     </Grid>
+    <Popup x:Name="SidebarPopup" Placement="Right" PlacementTarget="{Binding ElementName=SidebarRail}"
+           AllowsTransparency="True" StaysOpen="False" PopupAnimation="Slide" Closed="SidebarPopup_Closed" />
     <Border x:Name="StatusBar" Grid.Row="3" Background="{StaticResource Surface}" Padding="16,7">
       <TextBlock x:Name="StatusText" Text="Ready" Foreground="#A9BBCD" TextTrimming="CharacterEllipsis" />
     </Border>

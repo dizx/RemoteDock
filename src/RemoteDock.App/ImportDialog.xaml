@@ -1,0 +1,23 @@
+<Window x:Class="RemoteDock.App.ImportDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Style="{StaticResource {x:Type Window}}" Title="Import connections"
+        Width="620" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+  <StackPanel Margin="24">
+    <TextBlock Text="Bring your connections" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,14" />
+    <TextBlock Text="Import mRemoteNG XML or one or more .rdp files. Existing imported entries are updated; other connections are kept."
+               TextWrapping="Wrap" Foreground="#A9BBCD" Margin="0,0,0,12" />
+    <TextBox x:Name="PathsBox" IsReadOnly="True" Height="80" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.Name="Import files" />
+    <Button Content="Choose files…" Click="Browse_Click" HorizontalAlignment="Left" />
+    <TextBlock x:Name="SummaryText" TextWrapping="Wrap" Foreground="#68E2E8" Margin="0,12" />
+    <CheckBox x:Name="PasswordsBox" IsChecked="True" Content="Import saved passwords into Windows Credential Manager" />
+    <CheckBox x:Name="ScaledFitBox" IsChecked="True" Content="Use shared Scaled Fit (1/2 resolution) for imported connections" />
+    <TextBlock Text="mRemoteNG master password (only if you set a custom one)" Margin="0,12,0,0" />
+    <PasswordBox x:Name="MasterPassword" AutomationProperties.Name="mRemoteNG master password" />
+    <TextBlock x:Name="ErrorText" Foreground="#FFAFA8" TextWrapping="Wrap" Margin="0,4,0,12" />
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button Content="Cancel" IsCancel="True" />
+      <Button x:Name="ImportButton" Content="Import connections" IsDefault="True" Click="Import_Click" />
+    </StackPanel>
+  </StackPanel>
+</Window>

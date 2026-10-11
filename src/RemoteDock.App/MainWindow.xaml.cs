@@ -6,24 +6,33 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
 using RemoteDock.Core;
 
 namespace RemoteDock.App;
 
 public partial class MainWindow : Window
 {
-    private readonly ConnectionStore _store = new(Path.Combine(App.DataDirectory, "connections.json"));
-    private readonly List<ConnectionProfile> _connections = [];
+    private readonly ConnectionStore _store;
+    private ConnectionCatalog _catalog = new();
+    private readonly DispatcherTimer _sidebarHideTimer = new() { Interval = TimeSpan.FromMilliseconds(650) };
     private bool _storeReadable = true;
     private bool _focusMode;
     private bool _fullScreen;
     private WindowState _previousState;
     private SessionView? ActiveSession => (Tabs.SelectedItem as ListBoxItem)?.Tag as SessionView;
+    private object? SelectedEntry => (ConnectionsList.SelectedItem as TreeViewItem)?.Tag;
+    private Guid? SelectedGroupId => SelectedEntry switch { ConnectionGroup g => g.Id, ConnectionProfile p => p.GroupId, _ => null };
 
-    public MainWindow()
+    public MainWindow() : this(new ConnectionStore(Path.Combine(App.DataDirectory, "connections.json"))) { }
+
+    internal MainWindow(ConnectionStore store)
     {
+        _store = store;
         InitializeComponent();
-        try { _connections.AddRange(_store.Load()); }
+        _sidebarHideTimer.Tick += HideSidebarAfterDelay;
+        try { _catalog = _store.LoadCatalog(); }
         catch (Exception ex)
         {
             _storeReadable = false;
@@ -32,86 +41,284 @@ public partial class MainWindow : Window
                 $"The connection file could not be read and has been preserved.\n\n{ex.Message}\n\n{App.DataDirectory}",
                 "Connection file", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+        AutoHideBox.IsChecked = _catalog.AutoHideConnections;
         RefreshConnections();
+        UpdateSidebarLayout();
     }
+
+    private static Guid? EntryId(object? entry) => entry switch { ConnectionProfile p => p.Id, ConnectionGroup g => g.Id, _ => null };
 
     private void RefreshConnections(Guid? selectedId = null)
     {
         if (ConnectionsList is null) return;
-        selectedId ??= (ConnectionsList.SelectedItem as ConnectionProfile)?.Id;
+        selectedId ??= EntryId(SelectedEntry);
+        var expanded = TreeItems(ConnectionsList.Items).Where(i => i.Tag is ConnectionGroup)
+            .ToDictionary(i => ((ConnectionGroup)i.Tag).Id, i => i.IsExpanded);
         string search = SearchBox.Text.Trim();
-        var shown = _connections.Where(p => p.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                                           p.Host.Contains(search, StringComparison.OrdinalIgnoreCase))
-                                .OrderBy(p => p.Name).ToArray();
-        ConnectionsList.ItemsSource = shown;
-        ConnectionsList.SelectedItem = shown.FirstOrDefault(p => p.Id == selectedId);
+        bool Matches(string value) => value.Contains(search, StringComparison.OrdinalIgnoreCase);
+
+        List<TreeViewItem> Build(Guid? parent, bool includeAll)
+        {
+            var items = new List<TreeViewItem>();
+            foreach (var group in _catalog.Groups.Where(g => g.ParentId == parent).OrderBy(g => g.Name))
+            {
+                bool groupMatch = includeAll || Matches(group.Name);
+                var children = Build(group.Id, groupMatch);
+                if (!groupMatch && children.Count == 0) continue;
+                var item = new TreeViewItem { Header = $"▸  {group.Name}", Tag = group,
+                    IsExpanded = search.Length > 0 || !expanded.TryGetValue(group.Id, out bool wasExpanded) || wasExpanded,
+                    Margin = new Thickness(0, 5, 0, 5) };
+                foreach (var child in children) item.Items.Add(child);
+                items.Add(item);
+            }
+            foreach (var profile in _catalog.Connections.Where(p => p.GroupId == parent && (includeAll || Matches(p.Name) || Matches(p.Host))).OrderBy(p => p.Name))
+            {
+                var header = new StackPanel { Margin = new Thickness(4, 7, 0, 7) };
+                header.Children.Add(new TextBlock { Text = profile.Name, FontWeight = FontWeights.SemiBold });
+                header.Children.Add(new TextBlock { Text = profile.Host, FontSize = 11, Foreground = new SolidColorBrush(Color.FromRgb(145, 165, 187)) });
+                var item = new TreeViewItem { Header = header, Tag = profile, ToolTip = profile.Host };
+                System.Windows.Automation.AutomationProperties.SetName(item, profile.Name);
+                items.Add(item);
+            }
+            return items;
+        }
+
+        ConnectionsList.Items.Clear();
+        foreach (var item in Build(null, search.Length == 0)) ConnectionsList.Items.Add(item);
+        var selected = TreeItems(ConnectionsList.Items).FirstOrDefault(i => EntryId(i.Tag) == selectedId);
+        if (selected is not null) selected.IsSelected = true;
+        UpdateWelcome();
+    }
+
+    private static IEnumerable<TreeViewItem> TreeItems(ItemCollection items)
+    {
+        foreach (TreeViewItem item in items)
+        {
+            yield return item;
+            foreach (var child in TreeItems(item.Items)) yield return child;
+        }
     }
 
     private void Search_Changed(object sender, TextChangedEventArgs e) => RefreshConnections();
+    private void Connection_Selected(object sender, RoutedPropertyChangedEventArgs<object> e) => UpdateWelcome();
     private void New_Click(object sender, RoutedEventArgs e) => EditConnection(null);
+    private void NewGroup_Click(object sender, RoutedEventArgs e) => EditGroup(new() { ParentId = SelectedGroupId });
     private void Edit_Click(object sender, RoutedEventArgs e)
     {
-        if (ConnectionsList.SelectedItem is ConnectionProfile profile) EditConnection(profile);
+        if (SelectedEntry is ConnectionProfile profile) EditConnection(profile);
+        else if (SelectedEntry is ConnectionGroup group) EditGroup(group);
     }
 
     private void EditConnection(ConnectionProfile? existing)
     {
-        var editor = new ConnectionEditor(existing) { Owner = this };
-        if (editor.ShowDialog() != true || editor.Result is not { } profile) return;
-        var updated = _connections.Where(p => p.Id != profile.Id).Append(profile).ToArray();
-        if (!SaveConnections(updated)) return;
-        RefreshConnections(profile.Id);
-        StatusText.Text = "Connection saved. New settings apply on the next connection.";
+        try
+        {
+            bool hasPassword = existing is not null && CredentialStore.Read(CredentialStore.ConnectionTarget(existing.Id)) is not null;
+            var editor = new ConnectionEditor(existing, _catalog, SelectedGroupId, hasPassword) { Owner = this };
+            if (editor.ShowDialog() != true || editor.Result is not { } profile) return;
+            var updated = _catalog with { Connections = _catalog.Connections.Where(p => p.Id != profile.Id).Append(profile).ToArray() };
+            if (!SaveCatalog(updated, CredentialStore.ConnectionTarget(profile.Id), editor.RememberPassword, editor.TakePassword(), _catalog.Resolve(profile).UserName)) return;
+            RefreshConnections(profile.Id);
+            StatusText.Text = "Connection saved. Reconnect to apply updated settings.";
+        }
+        catch (Exception ex) { ShowError(ex, "Connection settings"); }
     }
 
-    private bool SaveConnections(ConnectionProfile[] profiles)
+    private void EditGroup(ConnectionGroup group)
     {
         try
         {
-            if (!_storeReadable) throw new IOException("Repair the existing connection file before saving changes.");
-            _store.Save(profiles);
-            _connections.Clear();
-            _connections.AddRange(profiles);
+            bool hasPassword = CredentialStore.Read(CredentialStore.GroupTarget(group.Id)) is not null;
+            var editor = new ConnectionEditor(group, _catalog, hasPassword) { Owner = this };
+            if (editor.ShowDialog() != true || editor.GroupResult is not { } result) return;
+            var updated = _catalog with { Groups = _catalog.Groups.Where(g => g.Id != result.Id).Append(result).ToArray() };
+            if (!SaveCatalog(updated, CredentialStore.GroupTarget(result.Id), editor.RememberPassword, editor.TakePassword(), updated.GroupDefaults(result.Id).UserName)) return;
+            RefreshConnections(result.Id);
+            StatusText.Text = "Group saved. Its inherited settings apply when connections are opened or reconnected.";
+        }
+        catch (Exception ex) { ShowError(ex, "Group settings"); }
+    }
+
+    private void Import_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ImportDialog { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.Result is not { } imported) return;
+        if (!CommitImport(imported)) return;
+        RefreshConnections(imported.Connections.FirstOrDefault()?.Id);
+        int passwords = imported.Passwords.Count(p => !string.IsNullOrEmpty(p.Password) || p.WindowsProtected is not null);
+        StatusText.Text = $"Imported {imported.Connections.Length} connections, {imported.Groups.Length} groups and {passwords} passwords. Skipped {imported.SkippedCount} unsupported items.";
+        if (imported.Warnings.Count > 0) MessageBox.Show(this, string.Join(Environment.NewLine, imported.Warnings.Distinct()), "Import notes");
+    }
+
+    internal bool CommitImport(ConnectionImport imported)
+    {
+        var previous = new Dictionary<string, SavedCredential?>();
+        var changed = new List<string>();
+        try
+        {
+            if (!_storeReadable) throw new IOException("Repair the existing connection file before importing.");
+            var catalog = imported.MergeInto(_catalog);
+            foreach (var item in imported.Passwords)
+            {
+                string target = item.IsGroup ? CredentialStore.GroupTarget(item.OwnerId) : CredentialStore.ConnectionTarget(item.OwnerId);
+                string? password = item.WindowsProtected is null ? item.Password : WindowsDataProtection.UnprotectRdpPassword(item.WindowsProtected);
+                previous.TryAdd(target, CredentialStore.Read(target));
+                if (string.IsNullOrEmpty(password)) CredentialStore.Delete(target);
+                else
+                {
+                    string userName = item.IsGroup ? catalog.GroupDefaults(item.OwnerId).UserName
+                        : catalog.Resolve(catalog.Connections.Single(p => p.Id == item.OwnerId)).UserName;
+                    CredentialStore.Write(target, userName, password);
+                }
+                changed.Add(target);
+            }
+            _store.SaveCatalog(catalog);
+            _catalog = catalog;
             return true;
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Cannot save connections", MessageBoxButton.OK, MessageBoxImage.Error);
+            foreach (string target in changed.Distinct().Reverse())
+            {
+                try
+                {
+                    if (previous[target] is { } saved) CredentialStore.Write(target, saved.UserName, saved.Password);
+                    else CredentialStore.Delete(target);
+                }
+                catch (Exception rollback) { ex = new AggregateException("Import failed and a previous credential could not be restored.", ex, rollback); }
+            }
+            ShowError(ex, "Cannot import connections");
+            return false;
+        }
+    }
+
+    private bool SaveCatalog(ConnectionCatalog catalog, string? target = null, bool? remember = null, string? password = null, string userName = "")
+    {
+        SavedCredential? previous = null;
+        bool credentialChanged = false;
+        try
+        {
+            if (!_storeReadable) throw new IOException("Repair the existing connection file before saving changes.");
+            catalog.Validate();
+            if (target is not null && remember.HasValue)
+            {
+                previous = CredentialStore.Read(target);
+                if (!remember.Value)
+                {
+                    CredentialStore.Delete(target);
+                    credentialChanged = previous is not null;
+                }
+                else if (!string.IsNullOrEmpty(password))
+                {
+                    CredentialStore.Write(target, userName, password);
+                    credentialChanged = true;
+                }
+            }
+            _store.SaveCatalog(catalog);
+            _catalog = catalog;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (credentialChanged && target is not null)
+            {
+                try
+                {
+                    if (previous is null) CredentialStore.Delete(target);
+                    else CredentialStore.Write(target, previous.UserName, previous.Password);
+                }
+                catch (Exception rollback) { ex = new AggregateException("Saving failed and the previous credential could not be restored.", ex, rollback); }
+            }
+            ShowError(ex, "Cannot save connections");
             return false;
         }
     }
 
     private void Delete_Click(object sender, RoutedEventArgs e)
     {
-        if (ConnectionsList.SelectedItem is not ConnectionProfile profile) return;
-        if (MessageBox.Show(this, $"Delete saved connection '{profile.Name}'?", "Delete connection",
+        if (SelectedEntry is ConnectionProfile profile)
+        {
+            if (MessageBox.Show(this, $"Delete saved connection '{profile.Name}' and its saved password?", "Delete connection",
                 MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-        if (SaveConnections(_connections.Where(p => p.Id != profile.Id).ToArray())) RefreshConnections();
+            if (SaveCatalog(_catalog with { Connections = _catalog.Connections.Where(p => p.Id != profile.Id).ToArray() }, CredentialStore.ConnectionTarget(profile.Id), false)) RefreshConnections();
+        }
+        else if (SelectedEntry is ConnectionGroup group)
+        {
+            if (_catalog.Connections.Any(p => p.GroupId == group.Id) || _catalog.Groups.Any(g => g.ParentId == group.Id))
+            {
+                MessageBox.Show(this, "Move this group's connections and subgroups before deleting it.", "Group is not empty");
+                return;
+            }
+            if (MessageBox.Show(this, $"Delete group '{group.Name}' and its shared password?", "Delete group", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+            if (SaveCatalog(_catalog with { Groups = _catalog.Groups.Where(g => g.Id != group.Id).ToArray() }, CredentialStore.GroupTarget(group.Id), false)) RefreshConnections();
+        }
     }
 
-    private void Connect_Click(object sender, RoutedEventArgs e)
+    private void Connect_Click(object sender, RoutedEventArgs e) { if (SelectedEntry is ConnectionProfile profile) Connect(profile); }
+    private void ConnectAs_Click(object sender, RoutedEventArgs e) { if (SelectedEntry is ConnectionProfile profile) Connect(profile, prompt: true); }
+
+    private static TreeViewItem? ItemUnderPointer(DependencyObject? element)
     {
-        if (ConnectionsList.SelectedItem is ConnectionProfile profile) Connect(profile);
+        while (element is not null && element is not TreeViewItem)
+            element = element is Visual ? VisualTreeHelper.GetParent(element) : (element as FrameworkContentElement)?.Parent;
+        return element as TreeViewItem;
+    }
+
+    private void Connection_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (ItemUnderPointer(e.OriginalSource as DependencyObject) is { } item) { item.IsSelected = true; item.Focus(); }
     }
 
     private void Connection_DoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (ConnectionsList.SelectedItem is ConnectionProfile profile) Connect(profile);
+        if (ItemUnderPointer(e.OriginalSource as DependencyObject)?.Tag is ConnectionProfile profile) { e.Handled = true; Connect(profile); }
     }
 
     private void Connection_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || ConnectionsList.SelectedItem is not ConnectionProfile profile) return;
-        e.Handled = true;
-        Connect(profile);
+        if (e.Key == Key.Enter && SelectedEntry is ConnectionProfile profile) { e.Handled = true; Connect(profile); }
+        else if (e.Key == Key.F2) { e.Handled = true; Edit_Click(sender, e); }
     }
 
-    private void Connect(ConnectionProfile profile, SessionView? replace = null)
+    private SavedCredential? FindCredential(ConnectionProfile profile)
     {
-        var credentials = new CredentialsDialog(profile) { Owner = this };
-        if (credentials.ShowDialog() != true) return;
-        if (replace is not null) CloseSession(replace);
-        AddSession(profile with { UserName = credentials.UserName, Domain = credentials.Domain }, credentials.TakePassword());
+        var credential = CredentialStore.Read(CredentialStore.ConnectionTarget(profile.Id));
+        if (credential is not null || !profile.Inherit.HasFlag(InheritedSettings.Password)) return credential;
+        foreach (var group in _catalog.GroupChain(profile.GroupId).Reverse())
+        {
+            credential = CredentialStore.Read(CredentialStore.GroupTarget(group.Id));
+            if (credential is not null) return credential;
+            if (!group.InheritPassword) break;
+        }
+        return null;
+    }
+
+    private void Connect(ConnectionProfile profile, bool prompt = false)
+    {
+        try
+        {
+            var effective = _catalog.Resolve(profile);
+            var saved = FindCredential(profile);
+            string password = saved?.Password ?? "";
+            if (prompt || (saved is null && !string.IsNullOrWhiteSpace(effective.UserName)))
+            {
+                var credentials = new CredentialsDialog(effective) { Owner = this };
+                if (credentials.ShowDialog() != true) return;
+                password = credentials.TakePassword();
+                bool identityChanged = credentials.UserName != effective.UserName || credentials.Domain != effective.Domain;
+                var updatedProfile = identityChanged ? profile with { UserName = credentials.UserName, Domain = credentials.Domain, Inherit = profile.Inherit & ~InheritedSettings.SignIn } : profile;
+                if (identityChanged || credentials.RememberPassword)
+                {
+                    var updated = _catalog with { Connections = _catalog.Connections.Select(p => p.Id == profile.Id ? updatedProfile : p).ToArray() };
+                    if (!SaveCatalog(updated, credentials.RememberPassword ? CredentialStore.ConnectionTarget(profile.Id) : null,
+                        credentials.RememberPassword ? true : null, password, credentials.UserName)) return;
+                    RefreshConnections(profile.Id);
+                }
+                effective = _catalog.Resolve(updatedProfile);
+            }
+            AddSession(effective, password);
+        }
+        catch (Exception ex) { ShowError(ex, "Cannot connect"); }
     }
 
     internal SessionView AddSession(ConnectionProfile profile, string password, bool connect = true)
@@ -123,31 +330,50 @@ public partial class MainWindow : Window
         var close = new Button { Content = "×", Padding = new Thickness(6, 1, 6, 1), ToolTip = "Close and disconnect session" };
         close.Click += (_, e) => { e.Handled = true; CloseSession(session); };
         header.Children.Add(close);
-        var tab = new ListBoxItem { Content = header, Tag = session, ToolTip = profile.Host };
+        var tab = new ListBoxItem { Content = header, Tag = session, ToolTip = profile.Host, ContextMenu = new ContextMenu() };
+        var edit = new MenuItem { Header = "Edit connection" };
+        edit.Click += (_, _) => { if (_catalog.Connections.FirstOrDefault(p => p.Id == session.Profile.Id) is { } saved) EditConnection(saved); };
+        tab.ContextMenu.Items.Add(edit);
         SessionSurface.Children.Add(session);
         Tabs.Items.Add(tab);
         Tabs.SelectedItem = tab;
-        Welcome.Visibility = Visibility.Collapsed;
+        UpdateWelcome();
         return session;
     }
 
     private void Tab_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (SessionSurface is null) return;
-        foreach (var session in SessionSurface.Children.OfType<SessionView>())
-            session.Visibility = session == ActiveSession ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var session in SessionSurface.Children.OfType<SessionView>()) session.Visibility = session == ActiveSession ? Visibility.Visible : Visibility.Collapsed;
         ActiveSession?.Activate();
         UpdateStatus();
     }
 
     private void Session_StatusChanged(object? sender, EventArgs e) => UpdateStatus();
-
     private void UpdateStatus()
     {
         StatusText.Text = ActiveSession?.Status ?? "Ready";
         StatusText.ToolTip = StatusText.Text;
         FocusTitle.Text = ActiveSession is { } session ? $"{session.Profile.Name} · {session.Status}" : "RemoteDock";
         Title = ActiveSession is { } active ? $"{active.Profile.Name} — RemoteDock" : "RemoteDock";
+        ReconnectButton.IsEnabled = ActiveSession is not null;
+    }
+
+    private void UpdateWelcome()
+    {
+        if (WelcomeAction is null) return;
+        Welcome.Visibility = Tabs.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        var profile = SelectedEntry as ConnectionProfile ?? _catalog.Connections.OrderBy(p => p.Name).FirstOrDefault();
+        WelcomeAction.Content = profile is null ? "Add your first connection" : $"Connect to {profile.Name}";
+        WelcomeDescription.Text = profile is null
+            ? "Connect to a Windows desktop or Hyper-V console. Fit your workspace with fewer remote pixels and more room to work."
+            : "Your saved connections are ready. Choose one from the connections panel or open it below.";
+    }
+
+    private void Welcome_Click(object sender, RoutedEventArgs e)
+    {
+        var profile = SelectedEntry as ConnectionProfile ?? _catalog.Connections.OrderBy(p => p.Name).FirstOrDefault();
+        if (profile is null) EditConnection(null); else Connect(profile);
     }
 
     private void CloseSession(SessionView session)
@@ -158,25 +384,78 @@ public partial class MainWindow : Window
         SessionSurface.Children.Remove(session);
         if (tab is not null) Tabs.Items.Remove(tab);
         if (Tabs.SelectedItem is null && Tabs.Items.Count > 0) Tabs.SelectedIndex = Tabs.Items.Count - 1;
-        Welcome.Visibility = Tabs.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateWelcome();
         UpdateStatus();
     }
 
     private void Reconnect_Click(object sender, RoutedEventArgs e)
     {
         if (ActiveSession is not { } session) return;
-        var profile = _connections.FirstOrDefault(p => p.Id == session.Profile.Id) ?? session.Profile;
-        Connect(profile, session);
+        try
+        {
+            var profile = _catalog.Connections.FirstOrDefault(p => p.Id == session.Profile.Id) ?? session.Profile;
+            session.Reconnect(_catalog.Resolve(profile), FindCredential(profile)?.Password);
+            if (Tabs.SelectedItem is ListBoxItem { Content: StackPanel header }) ((TextBlock)header.Children[0]).Text = session.Profile.Name;
+        }
+        catch (Exception ex) { ShowError(ex, "Cannot reconnect"); }
     }
+
+    private void AutoHide_Click(object sender, RoutedEventArgs e)
+    {
+        if (!SaveCatalog(_catalog with { AutoHideConnections = AutoHideBox.IsChecked == true }))
+            AutoHideBox.IsChecked = _catalog.AutoHideConnections;
+        UpdateSidebarLayout();
+    }
+
+    private void UpdateSidebarLayout()
+    {
+        SidebarPopup.IsOpen = false;
+        if (_catalog.AutoHideConnections)
+        {
+            SidebarDockHost.Content = null;
+            SidebarPopup.Child = Sidebar;
+            Sidebar.Width = 280;
+        }
+        else
+        {
+            SidebarPopup.Child = null;
+            SidebarDockHost.Content = Sidebar;
+            Sidebar.Width = Sidebar.Height = double.NaN;
+        }
+        Sidebar.Visibility = _focusMode ? Visibility.Collapsed : Visibility.Visible;
+        SidebarDockHost.Visibility = _focusMode || _catalog.AutoHideConnections ? Visibility.Collapsed : Visibility.Visible;
+        SidebarRail.Visibility = !_focusMode && _catalog.AutoHideConnections ? Visibility.Visible : Visibility.Collapsed;
+        SidebarColumn.Width = new GridLength(_focusMode ? 0 : _catalog.AutoHideConnections ? 32 : 260);
+    }
+
+    private void RevealSidebar(object sender, RoutedEventArgs e)
+    {
+        if (!_catalog.AutoHideConnections || _focusMode) return;
+        _sidebarHideTimer.Stop();
+        Sidebar.Height = Math.Max(200, Workspace.ActualHeight);
+        SidebarPopup.IsOpen = true;
+    }
+
+    private void Sidebar_MouseEnter(object sender, MouseEventArgs e) => _sidebarHideTimer.Stop();
+    private void Sidebar_MouseLeave(object sender, MouseEventArgs e) => ScheduleSidebarHide();
+    private void Sidebar_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) => ScheduleSidebarHide();
+    private void ScheduleSidebarHide() { if (SidebarPopup.IsOpen) { _sidebarHideTimer.Stop(); _sidebarHideTimer.Start(); } }
+    private void HideSidebarAfterDelay(object? sender, EventArgs e)
+    {
+        _sidebarHideTimer.Stop();
+        if (!Sidebar.IsMouseOver && !SidebarRail.IsMouseOver && !(Sidebar.IsKeyboardFocusWithin && Keyboard.FocusedElement is TextBox) && OwnedWindows.Count == 0)
+            SidebarPopup.IsOpen = false;
+    }
+    private void SidebarPopup_Closed(object? sender, EventArgs e) => _sidebarHideTimer.Stop();
+    private void Workspace_SizeChanged(object sender, SizeChangedEventArgs e) { if (SidebarPopup?.IsOpen == true) Sidebar.Height = Math.Max(200, Workspace.ActualHeight); }
 
     private void Focus_Click(object sender, RoutedEventArgs e) => ToggleFocus();
     private void ToggleFocus()
     {
         _focusMode = !_focusMode;
-        Toolbar.Visibility = Sidebar.Visibility = Tabs.Visibility = StatusBar.Visibility =
-            _focusMode ? Visibility.Collapsed : Visibility.Visible;
-        SidebarColumn.Width = new GridLength(_focusMode ? 0 : 260);
+        Toolbar.Visibility = Tabs.Visibility = StatusBar.Visibility = _focusMode ? Visibility.Collapsed : Visibility.Visible;
         FocusStrip.Visibility = _focusMode ? Visibility.Visible : Visibility.Collapsed;
+        UpdateSidebarLayout();
         ActiveSession?.Activate();
     }
 
@@ -203,20 +482,18 @@ public partial class MainWindow : Window
 
     private void Previous_Click(object sender, RoutedEventArgs e) => SelectRelative(-1);
     private void Next_Click(object sender, RoutedEventArgs e) => SelectRelative(1);
-    private void SelectRelative(int offset)
-    {
-        if (Tabs.Items.Count > 0) Tabs.SelectedIndex = (Tabs.SelectedIndex + offset + Tabs.Items.Count) % Tabs.Items.Count;
-    }
-
+    private void SelectRelative(int offset) { if (Tabs.Items.Count > 0) Tabs.SelectedIndex = (Tabs.SelectedIndex + offset + Tabs.Items.Count) % Tabs.Items.Count; }
     private void Window_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.F11) { ToggleFullscreen(); e.Handled = true; }
-        else if (e.Key == Key.F && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
-        { ToggleFocus(); e.Handled = true; }
+        else if (e.Key == Key.F && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleFocus(); e.Handled = true; }
     }
 
+    private void ShowError(Exception ex, string title) => MessageBox.Show(this, ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error);
     private void Window_Closing(object? sender, CancelEventArgs e)
     {
+        SidebarPopup.IsOpen = false;
+        _sidebarHideTimer.Stop();
         foreach (var session in SessionSurface.Children.OfType<SessionView>().ToArray()) CloseSession(session);
     }
 }
