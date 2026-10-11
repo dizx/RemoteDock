@@ -1,0 +1,32 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <DrawingImage x:Key="RemoteDockMark">
+    <DrawingImage.Drawing>
+      <DrawingGroup>
+        <GeometryDrawing Brush="#0B1018">
+          <GeometryDrawing.Geometry>
+            <RectangleGeometry Rect="0,0,64,64" RadiusX="14" RadiusY="14" />
+          </GeometryDrawing.Geometry>
+        </GeometryDrawing>
+        <GeometryDrawing Brush="#191B35">
+          <GeometryDrawing.Pen><Pen Brush="#9588FF" Thickness="3" /></GeometryDrawing.Pen>
+          <GeometryDrawing.Geometry>
+            <RectangleGeometry Rect="25,12,29,25" RadiusX="4" RadiusY="4" />
+          </GeometryDrawing.Geometry>
+        </GeometryDrawing>
+        <GeometryDrawing Brush="#0E2230">
+          <GeometryDrawing.Pen><Pen Brush="#68E2E8" Thickness="3.5" /></GeometryDrawing.Pen>
+          <GeometryDrawing.Geometry>
+            <RectangleGeometry Rect="10,22,36,25" RadiusX="4" RadiusY="4" />
+          </GeometryDrawing.Geometry>
+        </GeometryDrawing>
+        <GeometryDrawing Geometry="M 28,48 L 28,54 M 20,54 L 36,54">
+          <GeometryDrawing.Pen><Pen Brush="#68E2E8" Thickness="3.5" StartLineCap="Round" EndLineCap="Round" /></GeometryDrawing.Pen>
+        </GeometryDrawing>
+        <GeometryDrawing Geometry="M 22,39 L 34,29 M 26,29 L 34,29 L 34,37">
+          <GeometryDrawing.Pen><Pen Brush="#F1FCFF" Thickness="3" StartLineCap="Round" EndLineCap="Round" LineJoin="Round" /></GeometryDrawing.Pen>
+        </GeometryDrawing>
+      </DrawingGroup>
+    </DrawingImage.Drawing>
+  </DrawingImage>
+</ResourceDictionary>

@@ -1,0 +1,63 @@
+<Window x:Class="RemoteDock.App.ConnectionEditor"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Style="{StaticResource {x:Type Window}}"
+        Title="Connection settings" Width="540" Height="750" MinHeight="500"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+  <DockPanel Margin="24">
+    <StackPanel DockPanel.Dock="Bottom">
+      <TextBlock x:Name="ErrorText" Foreground="#FFAFA8" TextWrapping="Wrap" Margin="0,8" />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <Button Content="Cancel" IsCancel="True" />
+        <Button Content="Save connection" IsDefault="True" Click="Save_Click" />
+      </StackPanel>
+    </StackPanel>
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+      <StackPanel Margin="0,0,12,0">
+        <TextBlock Text="Connection" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,18" />
+        <Label Target="{Binding ElementName=NameBox}" Foreground="White" Content="_Name" />
+        <TextBox x:Name="NameBox" />
+        <TextBlock Text="Connection type" />
+        <ComboBox x:Name="KindBox" SelectionChanged="Kind_Changed">
+          <ComboBoxItem Content="Remote Desktop (RDP)" />
+          <ComboBoxItem Content="Hyper-V console" />
+        </ComboBox>
+        <TextBlock Text="Host name / IP (Hyper-V: the host, not the guest)" />
+        <TextBox x:Name="HostBox" />
+        <TextBlock Text="Port" />
+        <TextBox x:Name="PortBox" />
+        <StackPanel x:Name="VmPanel">
+          <TextBlock Text="Virtual machine ID (GUID)" />
+          <TextBox x:Name="VmIdBox" />
+          <TextBlock Text="Find it on the host: Get-VM | Select Name, Id" Foreground="#A9BBCD" />
+          <CheckBox x:Name="EnhancedBox" Content="Request enhanced session" />
+          <TextBlock Text="Basic console resolution is controlled by the guest. Enhanced sessions require host and guest support."
+                     TextWrapping="Wrap" Foreground="#A9BBCD" Margin="0,4,0,12" />
+        </StackPanel>
+        <TextBlock Text="User name (optional)" />
+        <TextBox x:Name="UserBox" />
+        <TextBlock Text="Domain (optional)" />
+        <TextBox x:Name="DomainBox" />
+        <TextBlock Text="Display mode" />
+        <ComboBox x:Name="DisplayBox">
+          <ComboBoxItem Content="Scaled Fit — adaptive lower resolution, local scaling" />
+          <ComboBoxItem Content="Actual Size — fixed resolution, scroll to pan" />
+          <ComboBoxItem Content="Match Panel — resize the remote desktop" />
+        </ComboBox>
+        <TextBlock Text="Scaled Fit resolution (fraction of panel dimensions)" />
+        <ComboBox x:Name="ScaleBox" AutomationProperties.Name="Resolution scale fraction" />
+        <TextBlock Text="For a 3840 × 2160 panel: 1/2 requests 1920 × 1080; 2/3 requests 2560 × 1440. The remote resolution follows window resizing."
+                   TextWrapping="Wrap" Foreground="#A9BBCD" Margin="0,0,0,10" />
+        <TextBlock Text="Fixed resolution (Actual Size / basic Hyper-V request)" />
+        <Grid>
+          <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="30" /><ColumnDefinition /></Grid.ColumnDefinitions>
+          <TextBox x:Name="WidthBox" AutomationProperties.Name="Remote desktop width" />
+          <TextBlock Grid.Column="1" Text="×" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          <TextBox x:Name="HeightBox" Grid.Column="2" AutomationProperties.Name="Remote desktop height" />
+        </Grid>
+        <CheckBox x:Name="ClipboardBox" Content="Share clipboard" />
+        <CheckBox x:Name="KeysBox" Content="Send Windows key combinations to the remote session" />
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RemoteDock.Core/RemoteDock.Core.csproj" />
+    <Project Path="src/RemoteDock.App/RemoteDock.App.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RemoteDock.Core.Tests/RemoteDock.Core.Tests.csproj" />
+    <Project Path="tests/RemoteDock.SmokeTests/RemoteDock.SmokeTests.csproj" />
+  </Folder>
+</Solution>
