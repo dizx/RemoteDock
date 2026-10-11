@@ -33,9 +33,7 @@ public static class MRemoteNgImporter
         if (includePasswords && !string.IsNullOrEmpty(Attr(root, "Protected"))) _ = Decrypt(Attr(root, "Protected"));
 
         string source = Path.GetFullPath(path).ToUpperInvariant();
-        var importRoot = new ConnectionGroup { Id = ConnectionImport.StableId(source, "root"), Name = "mRemoteNG", InheritPassword = false,
-            Defaults = scaledFit ? new() { DisplayMode = DisplayMode.ScaledFit, Scale = new(1, 2) } : new() };
-        var groups = new List<ConnectionGroup> { importRoot };
+        var groups = new List<ConnectionGroup>();
         var connections = new List<ConnectionProfile>();
         var passwords = new List<ImportedPassword>();
         var warnings = new List<string>();
@@ -48,7 +46,7 @@ public static class MRemoteNgImporter
             passwords.Add(new(id, isGroup, encrypted.Length > 0 && !IsTrue(Attr(node, "InheritPassword")) ? Decrypt(encrypted) : null));
         }
 
-        void Visit(XElement parent, Guid parentId, string parentPath)
+        void Visit(XElement parent, Guid? parentId, string parentPath)
         {
             int index = 0;
             foreach (var node in parent.Elements().Where(e => e.Name.LocalName == "Node"))
@@ -68,14 +66,14 @@ public static class MRemoteNgImporter
                 {
                     groups.Add(new()
                     {
-                        Id = id, Name = name, ParentId = parentId, InheritPassword = Inherits("Password"),
+                        Id = id, Name = name, ParentId = parentId, InheritPassword = parentId.HasValue && Inherits("Password"),
                         Defaults = new()
                         {
                             UserName = Inherits("Username") ? null : Attr(node, "Username"),
                             Domain = Inherits("Domain") ? null : Attr(node, "Domain"),
                             Port = Inherits("Port") || Attr(node, "Port").Length == 0 || port == 0 ? null : port,
-                            DisplayMode = scaledFit || Inherits("Resolution") ? null : display,
-                            Scale = scaledFit || Inherits("Resolution") ? null : scale,
+                            DisplayMode = scaledFit ? (parentId is null ? DisplayMode.ScaledFit : null) : Inherits("Resolution") ? null : display,
+                            Scale = scaledFit ? (parentId is null ? scale : null) : Inherits("Resolution") ? null : scale,
                             RedirectClipboard = Inherits("RedirectClipboard") || node.Attribute("RedirectClipboard") is null ? null : clipboard,
                             RedirectWindowsKeys = Inherits("RedirectKeys") ? null : keys
                         }
@@ -85,6 +83,12 @@ public static class MRemoteNgImporter
                     continue;
                 }
                 if (!Effective(node, "Protocol").Equals("RDP", StringComparison.OrdinalIgnoreCase)) { skipped++; continue; }
+                if (string.IsNullOrWhiteSpace(Effective(node, "Hostname")))
+                {
+                    skipped++;
+                    warnings.Add($"{name}: skipped because no hostname is configured.");
+                    continue;
+                }
                 if (Effective(node, "RDGatewayHostname").Length > 0 && Effective(node, "RDGatewayUsageMethod") is not ("" or "Never" or "0"))
                 {
                     skipped++;
@@ -99,6 +103,7 @@ public static class MRemoteNgImporter
                 if (scaledFit || Inherits("Resolution")) inherit |= InheritedSettings.Display;
                 if (Inherits("RedirectClipboard")) inherit |= InheritedSettings.Clipboard;
                 if (Inherits("RedirectKeys")) inherit |= InheritedSettings.WindowsKeys;
+                if (parentId is null) inherit = InheritedSettings.None;
                 bool hyperV = IsTrue(Effective(node, "UseVmId"));
                 Guid? vmId = Guid.TryParse(Effective(node, "VmId"), out var parsedVm) ? parsedVm : null;
                 var profile = new ConnectionProfile
@@ -117,7 +122,7 @@ public static class MRemoteNgImporter
             }
         }
 
-        Visit(root, importRoot.Id, "");
+        Visit(root, null, "");
         if (root.Descendants().Any(n => Attr(n, "RedirectDiskDrives") is "true" or "True"))
             warnings.Add("Drive redirection settings are not imported; RemoteDock keeps drive sharing disabled.");
         var result = new ConnectionImport(groups.ToArray(), connections.ToArray(), passwords, warnings, skipped);

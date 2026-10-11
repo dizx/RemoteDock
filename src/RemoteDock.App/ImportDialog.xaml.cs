@@ -39,7 +39,7 @@ public partial class ImportDialog : Window
         try
         {
             var preview = ReadFiles(_paths, false, null, true);
-            SummaryText.Text = $"{preview.Connections.Length} supported connections · {preview.Groups.Length} groups · {preview.SkippedCount} unsupported items skipped";
+            SummaryText.Text = $"{preview.Connections.Length} supported connections · {preview.Groups.Length} groups · {preview.SkippedCount} items skipped";
         }
         catch (Exception ex) { SummaryText.Text = ""; ErrorText.Text = ex.Message; }
     }
