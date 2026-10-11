@@ -42,6 +42,7 @@ public sealed class ConnectionStoreTests : IDisposable
 
     [Theory]
     [InlineData("{broken")]
+    [InlineData("{}")]
     [InlineData("{\"Version\":99,\"Connections\":[]}")]
     [InlineData("{\"Version\":1,\"Connections\":null}")]
     public void CorruptOrUnknownFilesAreNotTreatedAsAnEmptyStore(string content)
@@ -126,6 +127,18 @@ public sealed class ConnectionStoreTests : IDisposable
         Assert.Empty(catalog.Groups);
         Assert.Equal(InheritedSettings.None, Assert.Single(catalog.Connections).Inherit);
         Assert.Equal("local-user", catalog.Resolve(catalog.Connections[0]).UserName);
+    }
+
+    [Fact]
+    public void AStaleWindowCannotOverwriteAnotherWindowsGroups()
+    {
+        var first = new ConnectionStore(StorePath);
+        var second = new ConnectionStore(StorePath);
+        _ = first.LoadCatalog();
+        _ = second.LoadCatalog();
+        first.SaveCatalog(new() { Groups = [new() { Name = "Other window's group" }] });
+        Assert.Throws<IOException>(() => second.SaveCatalog(new()));
+        Assert.Equal("Other window's group", Assert.Single(new ConnectionStore(StorePath).LoadCatalog().Groups).Name);
     }
 
     [Theory]

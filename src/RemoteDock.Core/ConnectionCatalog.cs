@@ -1,8 +1,12 @@
+using System.Text.Json.Serialization;
+
 namespace RemoteDock.Core;
 
 public sealed record ConnectionCatalog
 {
+    [JsonRequired]
     public int Version { get; init; } = 2;
+    [JsonRequired]
     public ConnectionProfile[] Connections { get; init; } = [];
     public ConnectionGroup[] Groups { get; init; } = [];
     public bool AutoHideConnections { get; init; }
@@ -23,6 +27,8 @@ public sealed record ConnectionCatalog
     }
 
     public string GroupPath(Guid groupId) => string.Join(" / ", Ancestors(groupId).Select(g => g.Name));
+
+    public IReadOnlyList<ConnectionGroup> GroupChain(Guid? groupId) => Ancestors(groupId).ToArray();
 
     public bool IsDescendant(Guid candidateId, Guid ancestorId) => Ancestors(candidateId).Any(g => g.Id == ancestorId);
 
