@@ -4,10 +4,15 @@ namespace RemoteDock.Core;
 public enum InheritedSettings
 {
     None = 0,
-    SignIn = 1,
+    UserName = 1,
     Port = 2,
     Display = 4,
-    Redirection = 8,
+    Clipboard = 8,
+    Domain = 16,
+    Password = 32,
+    WindowsKeys = 64,
+    SignIn = UserName | Domain | Password,
+    Redirection = Clipboard | WindowsKeys,
     All = SignIn | Port | Display | Redirection
 }
 
@@ -16,6 +21,7 @@ public sealed record ConnectionGroup
     public Guid Id { get; init; } = Guid.NewGuid();
     public string Name { get; init; } = "New group";
     public Guid? ParentId { get; init; }
+    public bool InheritPassword { get; init; } = true;
     public ConnectionDefaults Defaults { get; init; } = new();
 }
 
@@ -34,15 +40,15 @@ public sealed record ConnectionDefaults
 
     public ConnectionProfile Apply(ConnectionProfile profile, InheritedSettings inherit = InheritedSettings.All) => profile with
     {
-        UserName = inherit.HasFlag(InheritedSettings.SignIn) ? UserName ?? profile.UserName : profile.UserName,
-        Domain = inherit.HasFlag(InheritedSettings.SignIn) ? Domain ?? profile.Domain : profile.Domain,
+        UserName = inherit.HasFlag(InheritedSettings.UserName) ? UserName ?? profile.UserName : profile.UserName,
+        Domain = inherit.HasFlag(InheritedSettings.Domain) ? Domain ?? profile.Domain : profile.Domain,
         Port = inherit.HasFlag(InheritedSettings.Port) ? Port ?? profile.Port : profile.Port,
         DisplayMode = inherit.HasFlag(InheritedSettings.Display) ? DisplayMode ?? profile.DisplayMode : profile.DisplayMode,
         Scale = inherit.HasFlag(InheritedSettings.Display) ? Scale ?? profile.Scale : profile.Scale,
         DesktopWidth = inherit.HasFlag(InheritedSettings.Display) ? DesktopWidth ?? profile.DesktopWidth : profile.DesktopWidth,
         DesktopHeight = inherit.HasFlag(InheritedSettings.Display) ? DesktopHeight ?? profile.DesktopHeight : profile.DesktopHeight,
-        RedirectClipboard = inherit.HasFlag(InheritedSettings.Redirection) ? RedirectClipboard ?? profile.RedirectClipboard : profile.RedirectClipboard,
-        RedirectWindowsKeys = inherit.HasFlag(InheritedSettings.Redirection) ? RedirectWindowsKeys ?? profile.RedirectWindowsKeys : profile.RedirectWindowsKeys
+        RedirectClipboard = inherit.HasFlag(InheritedSettings.Clipboard) ? RedirectClipboard ?? profile.RedirectClipboard : profile.RedirectClipboard,
+        RedirectWindowsKeys = inherit.HasFlag(InheritedSettings.WindowsKeys) ? RedirectWindowsKeys ?? profile.RedirectWindowsKeys : profile.RedirectWindowsKeys
     };
 
     public void Validate() => Apply(new ConnectionProfile { Host = "validation.invalid" }).Validate();

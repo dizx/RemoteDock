@@ -18,6 +18,7 @@ public sealed record ConnectionProfile
     public string Domain { get; init; } = "";
     public Guid? VirtualMachineId { get; init; }
     public bool EnhancedSession { get; init; }
+    public bool AdministrativeSession { get; init; }
     public DisplayMode DisplayMode { get; init; } = DisplayMode.ScaledFit;
     // Retained for compatibility with profiles saved by the percentage-only version.
     public int ResolutionScalePercent { get; init; } = 50;
