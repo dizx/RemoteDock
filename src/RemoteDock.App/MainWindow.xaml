@@ -15,6 +15,7 @@
           <Button x:Name="ReconnectButton" Content="Reconnect" IsEnabled="False" Click="Reconnect_Click" ToolTip="Reconnect the active session with its credentials" />
           <Button x:Name="FocusButton" Content="Focus Mode" Click="Focus_Click" ToolTip="Hide navigation and tabs · Ctrl+Shift+F when local UI has focus" />
           <Button x:Name="FullscreenButton" Content="Full screen" Click="Fullscreen_Click" ToolTip="F11 when local UI has focus" />
+          <Button x:Name="AboutButton" Content="About ⓘ" Click="About_Click" ToolTip="About RemoteDock" AutomationProperties.Name="About RemoteDock" />
         </StackPanel>
         <StackPanel Orientation="Horizontal">
           <Image Source="{StaticResource RemoteDockMark}" Width="38" Height="38" Margin="0,0,11,0" />

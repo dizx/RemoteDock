@@ -459,6 +459,8 @@ public partial class MainWindow : Window
         ActiveSession?.Activate();
     }
 
+    private void About_Click(object sender, RoutedEventArgs e) => new AboutDialog { Owner = this }.ShowDialog();
+
     private void Fullscreen_Click(object sender, RoutedEventArgs e) => ToggleFullscreen();
     private void ToggleFullscreen()
     {

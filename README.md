@@ -51,7 +51,7 @@ The script generates the RDP wrappers, publishes a self-contained Release build
 with the .NET runtime, and compiles `installer/RemoteDock.iss`. For a custom Inno
 Setup location, pass `-IsccPath "C:\path\to\ISCC.exe"`.
 
-Output: `artifacts/installer/RemoteDock-1.0.0-win-x64-Setup.exe`.
+Output: `artifacts/installer/RemoteDock-1.0.1-win-x64-Setup.exe`.
 Version metadata is defined in `Directory.Build.props`.
 
 Setup offers two installation modes:
