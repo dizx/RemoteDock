@@ -38,6 +38,36 @@ dotnet run --project tests/RemoteDock.SmokeTests -c Release
 The smoke check opens local windows and activates the RDP controls offline. It
 does not initiate a remote connection. Run it in an interactive Windows session.
 
+## Installer
+
+To build the Windows x64 installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+alongside the build requirements above, then run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build-Installer.ps1
+```
+
+The script generates the RDP wrappers, publishes a self-contained Release build
+with the .NET runtime, and compiles `installer/RemoteDock.iss`. For a custom Inno
+Setup location, pass `-IsccPath "C:\path\to\ISCC.exe"`.
+
+Output: `artifacts/installer/RemoteDock-1.0.0-win-x64-Setup.exe`.
+Version metadata is defined in `Directory.Build.props`.
+
+Setup offers two installation modes:
+
+- **All users** (default): installs to `C:\Program Files\RemoteDock` and requires
+  administrator approval.
+- **Current user**: installs to `%LOCALAPPDATA%\Programs\RemoteDock` without
+  administrator privileges.
+
+Start menu and optional desktop shortcuts follow the selected installation mode.
+For unattended installs, use `/ALLUSERS` or `/CURRENTUSER` with `/VERYSILENT`.
+Windows supplies the RDP ActiveX control. Connection profiles remain per-user;
+uninstalling preserves them in `%LOCALAPPDATA%\RemoteDock`.
+
+Copyright (c) 2026 Morten Aasheim.
+
 ## Connecting
 
 Create a connection, choose its display mode, save, and select **Connect**.
