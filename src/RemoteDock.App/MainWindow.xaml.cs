@@ -585,6 +585,7 @@ public partial class MainWindow : Window
             WindowState = _previousState;
         }
         _fullScreen = !_fullScreen;
+        ActiveSession?.RefreshDisplay();
     }
 
     private void Previous_Click(object sender, RoutedEventArgs e) => SelectRelative(-1);

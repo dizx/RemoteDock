@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -23,10 +24,14 @@ internal static class Program
         var app = new RemoteDock.App.App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         string sandbox = Path.Combine(Path.GetTempPath(), "opencode", "RemoteDock.Smoke", Guid.NewGuid().ToString("N"));
         var store = new ConnectionStore(Path.Combine(sandbox, "connections.json"));
+        var sessionStore = new SessionStore(Path.Combine(sandbox, "sessions.json"));
         var group = new ConnectionGroup { Name = "Lab", Defaults = new() { Domain = "LAB", Scale = new(2, 3) } };
         var savedProfile = new ConnectionProfile { Name = "Saved test connection", Host = "offline.invalid", GroupId = group.Id, Inherit = InheritedSettings.All };
-        store.SaveCatalog(new() { Groups = [group], Connections = [savedProfile] });
+        var importedProfiles = Enumerable.Range(1, 25).Select(index => savedProfile with { Id = Guid.NewGuid(), Name = $"Test imported connection {index:00}",
+            LastConnectedAt = index == 25 ? DateTimeOffset.UnixEpoch : null });
+        store.SaveCatalog(new() { Groups = [group], Connections = new[] { savedProfile }.Concat(importedProfiles).ToArray(), AutoHideConnections = true });
         string credentialTarget = CredentialStore.ConnectionTarget(Guid.NewGuid());
+        var originalPointer = System.Windows.Forms.Cursor.Position;
         bool credentialWritten = false;
         app.InitializeComponent();
         app.Startup += async (_, _) =>
@@ -34,7 +39,7 @@ internal static class Program
             MainWindow? window = null;
             try
             {
-                app.MainWindow = new MainWindow(store);
+                app.MainWindow = new MainWindow(store, sessionStore);
                 await Task.Yield();
                 window = (MainWindow)app.MainWindow;
                 await Task.Delay(150);
@@ -44,6 +49,50 @@ internal static class Program
                 encoder.Frames.Add(BitmapFrame.Create(image));
                 Directory.CreateDirectory("artifacts/smoke");
                 using (var file = File.Create("artifacts/smoke/startup.png")) encoder.Save(file);
+
+                var sidebarPopup = (Popup)window.FindName("SidebarPopup");
+                var sidebar = (FrameworkElement)window.FindName("Sidebar");
+                var revealButton = (Button)window.FindName("SidebarRevealButton");
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    var outside = ((FrameworkElement)window.FindName("SessionSurface")).PointToScreen(new Point(400, 100));
+                    System.Windows.Forms.Cursor.Position = new((int)outside.X, (int)outside.Y);
+                    await Task.Delay(100);
+                    var rail = revealButton.PointToScreen(new Point(revealButton.ActualWidth / 2, revealButton.ActualHeight / 2));
+                    System.Windows.Forms.Cursor.Position = new((int)rail.X, (int)rail.Y);
+                    await Task.Delay(200);
+                    Require(sidebarPopup.IsOpen && sidebar.IsVisible && PresentationSource.FromVisual(sidebar) is not null,
+                        $"Saved auto-hide sidebar failed to open visibly on attempt {attempt + 1}: open={sidebarPopup.IsOpen}, visible={sidebar.IsVisible}.");
+                    MouseEvent(0x0002, 0, 0, 0, UIntPtr.Zero);
+                    MouseEvent(0x0004, 0, 0, 0, UIntPtr.Zero);
+                    await Task.Delay(200);
+                    Require(sidebarPopup.IsOpen && sidebar.IsVisible, "Clicking the reveal rail after hovering closed the sidebar.");
+                    var inside = sidebar.PointToScreen(new Point(100, 30));
+                    System.Windows.Forms.Cursor.Position = new((int)inside.X, (int)inside.Y);
+                    await Task.Delay(100);
+                    Require(sidebarPopup.IsOpen, "Moving from the rail into the sidebar closed it.");
+                    System.Windows.Forms.Cursor.Position = new((int)outside.X, (int)outside.Y);
+                    await Task.Delay(850);
+                    Require(!sidebarPopup.IsOpen, "The sidebar did not auto-hide after the pointer left.");
+                }
+                revealButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                await Task.Delay(100);
+                var popupTree = (TreeView)window.FindName("ConnectionsList");
+                var popupGroup = (TreeViewItem)popupTree.Items[0];
+                var popupConnection = (TreeViewItem)popupGroup.Items[0];
+                var connectionPoint = popupConnection.PointToScreen(new Point(50, 12));
+                System.Windows.Forms.Cursor.Position = new((int)connectionPoint.X, (int)connectionPoint.Y);
+                MouseEvent(0x0008, 0, 0, 0, UIntPtr.Zero);
+                MouseEvent(0x0010, 0, 0, 0, UIntPtr.Zero);
+                await Task.Delay(850);
+                Require(popupTree.ContextMenu.IsOpen && sidebarPopup.IsOpen, "The sidebar disappeared while its right-click menu was open.");
+                Capture(popupTree.ContextMenu, "artifacts/smoke/context-menu.png");
+                Capture(sidebar, "artifacts/smoke/sidebar.png");
+                popupTree.ContextMenu.IsOpen = false;
+                sidebarPopup.IsOpen = false;
+                var startupAutoHide = (CheckBox)window.FindName("AutoHideBox");
+                startupAutoHide.IsChecked = false;
+                startupAutoHide.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
 
                 Require(((Button)window.FindName("WelcomeAction")).Content.ToString() == "Connect to Saved test connection",
                     "The welcome screen treats an existing connection as the first connection.");
@@ -65,6 +114,19 @@ internal static class Program
                     .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
                 Require(editOpened, "The context-menu Edit action did not open the selected connection.");
 
+                var sortButton = (Button)window.FindName("SortButton");
+                sortButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                var sortedGroup = (TreeViewItem)tree.Items[0];
+                Require(((ConnectionProfile)((TreeViewItem)sortedGroup.Items[0]).Tag).Name == "Test imported connection 25",
+                    "Last-connected sorting did not put the recent connection first.");
+                Require(((ConnectionProfile)((TreeViewItem)tree.SelectedItem).Tag).Id == savedProfile.Id,
+                    "Sorting lost the selected connection.");
+                Require(new ConnectionStore(Path.Combine(sandbox, "connections.json")).LoadCatalog().SortOrder == ConnectionSortOrder.LastConnected,
+                    "Sort preference was not saved.");
+                sortButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Require(((ConnectionProfile)((TreeViewItem)((TreeViewItem)tree.Items[0]).Items[0]).Tag).Id == savedProfile.Id,
+                    "Alphabetical sorting was not restored.");
+
                 CredentialStore.Write(credentialTarget, "smoke-test-user", "temporary-smoke-test-secret");
                 credentialWritten = true;
                 Require(CredentialStore.Read(credentialTarget) == new SavedCredential("smoke-test-user", "temporary-smoke-test-secret"),
@@ -82,6 +144,10 @@ internal static class Program
                 int DesktopWidth() => (int)client.GetType().GetProperty("DesktopWidth")!.GetValue(client)!;
                 int DesktopHeight() => (int)client.GetType().GetProperty("DesktopHeight")!.GetValue(client)!;
                 var initialDesktop = new PixelSize(DesktopWidth(), DesktopHeight());
+                var extended = (MSTSCLib.IMsRdpExtendedSettings)((dynamic)client).GetOcx();
+                int expectedDpi = DisplayPolicy.RemoteDesktopScale(profile, host.Child.DeviceDpi);
+                Require(Convert.ToInt32(extended.get_Property("DesktopScaleFactor")) == expectedDpi,
+                    "The default remote DPI did not follow the local monitor.");
                 var expectedDesktop = DisplayPolicy.RequestedDesktop(profile, new(host.Child.ClientSize.Width, host.Child.ClientSize.Height));
                 Require(initialDesktop == expectedDesktop, $"Initial desktop {initialDesktop} differs from adaptive policy {expectedDesktop}.");
 
@@ -138,6 +204,42 @@ internal static class Program
                 Require(new PixelSize(DesktopWidth(), DesktopHeight()) == initialDesktop, "Full-screen attempted offline renegotiation.");
                 ((Button)window.FindName("FullscreenButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
+                // The native renderer needs an actual resize even if its outer bounds are unchanged.
+                ((Button)window.FindName("FocusButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                foreach (var previousState in new[] { WindowState.Normal, WindowState.Maximized })
+                {
+                    window.WindowState = previousState;
+                    await Task.Delay(100);
+                    ((Button)window.FindName("FullscreenButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    await Task.Delay(350);
+                    dynamic rdp = client;
+                    ((Button)window.FindName("FullscreenButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    await Task.Delay(450);
+                    Require(window.WindowStyle == WindowStyle.SingleBorderWindow && window.WindowState == previousState,
+                        "Leaving fullscreen did not restore the previous window state.");
+                    Require((bool)rdp.AdvancedSettings2.SmartSizing, "Leaving fullscreen disabled Scaled Fit.");
+                    var expectedBounds = DisplayPolicy.Fit(new(DesktopWidth(), DesktopHeight()), new(host.Child.ClientSize.Width, host.Child.ClientSize.Height));
+                    Require(client.Bounds == new System.Drawing.Rectangle(expectedBounds.X, expectedBounds.Y, expectedBounds.Width, expectedBounds.Height),
+                        "Leaving fullscreen did not refit the native viewport.");
+                    Require(ReferenceEquals(host.Child.Controls[0], client), "Leaving fullscreen recreated the session.");
+                    Require(((FrameworkElement)window.FindName("FocusStrip")).IsVisible, "Leaving fullscreen unexpectedly left Focus Mode.");
+                    var finalBounds = client.Bounds;
+                    var panelSize = host.Child.ClientSize;
+                    int nativeResizes = 0;
+                    EventHandler countResize = (_, _) => nativeResizes++;
+                    client.SizeChanged += countResize;
+                    session.RefreshDisplay();
+                    await Task.Delay(150);
+                    client.SizeChanged -= countResize;
+                    Require(nativeResizes >= 2, "Refreshing unchanged bounds did not deliver a fresh native resize.");
+                    Require(client.Bounds == finalBounds && host.Child.ClientSize == panelSize,
+                        "Native resize recovery changed the final viewport geometry.");
+                    Require(new PixelSize(DesktopWidth(), DesktopHeight()) == initialDesktop,
+                        "Native resize recovery changed the offline remote resolution.");
+                }
+                ((Button)window.FindName("ExitFocusButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                window.WindowState = WindowState.Normal;
+
                 var enhanced = window.AddSession(second.Profile with { Id = Guid.NewGuid(), EnhancedSession = true }, "", connect: false);
                 await Task.Delay(250);
                 Require(enhanced.Status == "RDP control initialized (offline)", enhanced.Status);
@@ -145,25 +247,116 @@ internal static class Program
                 await Task.Delay(250);
                 Require(actualSize.Status == "RDP control initialized (offline)", actualSize.Status);
                 var actualClient = ((WindowsFormsHost)actualSize.Content).Child.Controls[0];
+                actualSize.RefreshDisplay();
+                await Task.Delay(100);
+                Require(!(bool)((dynamic)actualClient).AdvancedSettings2.SmartSizing, "Display refresh enabled scaling in Actual Size mode.");
                 Require(actualClient.Width == 1920 && actualClient.Height == 1080, "Actual Size did not preserve pixel dimensions.");
 
                 var editor = new ConnectionEditor(profile) { Owner = window };
                 editor.Show();
                 await Task.Delay(100);
+                var dpiBox = (ComboBox)editor.FindName("DpiBox");
+                Require((string)dpiBox.SelectedItem.GetType().GetProperty("Label")!.GetValue(dpiBox.SelectedItem)! == "Same as local PC",
+                    "Remote DPI does not default to the local PC in the editor.");
                 var scaleBox = (ComboBox)editor.FindName("ScaleBox");
                 Require(scaleBox.Items.Contains(new ResolutionScale(1, 2)), "The half-resolution preset is missing.");
                 Require(scaleBox.Items.Contains(new ResolutionScale(2, 3)), "The two-thirds-resolution preset is missing.");
-                scaleBox.SelectedItem = new ResolutionScale(2, 3);
+                scaleBox.BringIntoView();
+                await Task.Delay(100);
+                scaleBox.IsDropDownOpen = true;
+                await Task.Delay(100);
+                var fractionItem = (ComboBoxItem)scaleBox.ItemContainerGenerator.ContainerFromItem(new ResolutionScale(2, 3));
+                Require(fractionItem.IsVisible, "The themed resolution dropdown did not show its options.");
+                var fractionPoint = fractionItem.PointToScreen(new Point(fractionItem.ActualWidth / 2, fractionItem.ActualHeight / 2));
+                System.Windows.Forms.Cursor.Position = new((int)fractionPoint.X, (int)fractionPoint.Y);
+                MouseEvent(0x0002, 0, 0, 0, UIntPtr.Zero);
+                MouseEvent(0x0004, 0, 0, 0, UIntPtr.Zero);
+                await Task.Delay(100);
                 Require((ResolutionScale)scaleBox.SelectedItem == new ResolutionScale(2, 3), "Cannot select two-thirds resolution.");
+                Require(!scaleBox.IsDropDownOpen, "The themed dropdown did not close after selecting a fraction.");
+                var rememberPassword = (CheckBox)editor.FindName("RememberPasswordBox");
+                rememberPassword.BringIntoView();
+                await Task.Delay(100);
+                var rememberPoint = rememberPassword.PointToScreen(new Point(8, rememberPassword.ActualHeight / 2));
+                System.Windows.Forms.Cursor.Position = new((int)rememberPoint.X, (int)rememberPoint.Y);
+                MouseEvent(0x0002, 0, 0, 0, UIntPtr.Zero);
+                MouseEvent(0x0004, 0, 0, 0, UIntPtr.Zero);
+                await Task.Delay(100);
+                Require(rememberPassword.IsChecked == true && ((PasswordBox)editor.FindName("PasswordInput")).IsEnabled,
+                    "The themed checkbox did not enable password entry.");
+                ((TextBlock)editor.FindName("Heading")).BringIntoView();
+                await Task.Delay(100);
+                Capture(editor, "artifacts/smoke/connection-editor.png");
                 editor.Close();
+                var dpiEditor = new ConnectionEditor(profile) { Owner = window };
+                _ = window.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    var choices = (ComboBox)dpiEditor.FindName("DpiBox");
+                    choices.SelectedItem = choices.Items.Cast<object>().Single(choice =>
+                        (int)choice.GetType().GetProperty("Percent")!.GetValue(choice)! == 175);
+                    ((Button)dpiEditor.FindName("SaveButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                }), DispatcherPriority.Background);
+                Require(dpiEditor.ShowDialog() == true && dpiEditor.Result?.RemoteDpiScalePercent == 175,
+                    "The remote DPI dropdown did not save the selected value.");
+                var dpiProfile = profile with { Id = Guid.NewGuid(), RemoteDpiScalePercent = 175 };
+                var dpiSession = window.AddSession(dpiProfile, "", connect: false);
+                await Task.Delay(250);
+                Require(dpiSession.Status == "RDP control initialized (offline)", dpiSession.Status);
+                var dpiClient = ((WindowsFormsHost)dpiSession.Content).Child.Controls[0];
+                var dpiSettings = (MSTSCLib.IMsRdpExtendedSettings)((dynamic)dpiClient).GetOcx();
+                Require(Convert.ToInt32(dpiSettings.get_Property("DesktopScaleFactor")) == 175,
+                    "The explicit remote DPI was not applied to the RDP control before connection.");
+                Require(Convert.ToInt32(dpiSettings.get_Property("DeviceScaleFactor")) == 140,
+                    "Remote device scale did not use an RDP-supported value.");
                 var credentials = new CredentialsDialog(profile) { Owner = window };
                 credentials.Show();
                 await Task.Delay(100);
+                Capture(credentials, "artifacts/smoke/credentials.png");
                 credentials.Close();
+
+                foreach (bool confirm in new[] { false, true })
+                {
+                    _ = window.Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        var message = app.Windows.OfType<MessageDialog>().Single();
+                        Capture(message, "artifacts/smoke/confirmation.png");
+                        ((Button)message.FindName(confirm ? "ConfirmButton" : "DismissButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    }), DispatcherPriority.Background);
+                    var answer = MessageDialog.ShowMessage(window, "Delete this saved connection and its password?", "Delete connection", MessageBoxButton.YesNo);
+                    Require(answer == (confirm ? MessageBoxResult.Yes : MessageBoxResult.No), "The themed confirmation returned the wrong choice.");
+                }
+
+                window.AddSession(savedProfile, "", connect: false);
+                await Task.Delay(200);
+                Require(new ConnectionStore(Path.Combine(sandbox, "connections.json")).LoadCatalog().Connections.Single(p => p.Id == savedProfile.Id).LastConnectedAt is null,
+                    "Initializing an offline session incorrectly recorded a successful connection.");
+                Require(sessionStore.Load().SequenceEqual(new[] { savedProfile.Id }), "Open tabs were not saved before shutdown.");
+                var savedTab = ((ListBox)window.FindName("Tabs")).Items.Cast<ListBoxItem>().Last();
+                ((StackPanel)savedTab.Content).Children.OfType<Button>().Single().RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Require(sessionStore.Load().Length == 0, "Explicitly closing a tab did not remove it from recovery state.");
+                window.AddSession(savedProfile, "", connect: false);
 
                 window.Close();
                 Require(client.IsDisposed && actualClient.IsDisposed, "Closing the window left native controls alive.");
-                Console.WriteLine("PASS: grouped tree; right-click Edit; existing-connection welcome; Windows Credential Manager round-trip; direct reconnect; sidebar overlay without viewport resize; RDP/Hyper-V activation; scaling; Focus Mode/full-screen; native disposal. No network connection attempted.");
+                Require(sessionStore.Load().SequenceEqual(new[] { savedProfile.Id }), "Application shutdown erased the tabs to restore.");
+
+                var restoreCatalog = new ConnectionStore(Path.Combine(sandbox, "connections.json"));
+                var catalog = restoreCatalog.LoadCatalog();
+                restoreCatalog.SaveCatalog(catalog with { Connections = catalog.Connections.Select(p => p.Id == savedProfile.Id
+                    ? p with { UserName = "restore-test-user", Inherit = InheritedSettings.None } : p).ToArray() });
+                foreach (bool reopen in new[] { false, true })
+                {
+                    sessionStore.Save([savedProfile.Id, Guid.NewGuid()]);
+                    window = new MainWindow(new ConnectionStore(Path.Combine(sandbox, "connections.json")), sessionStore);
+                    var response = RespondToRestorePrompt(app, reopen);
+                    window.Show();
+                    await response;
+                    await Task.Delay(100);
+                    Require(((ListBox)window.FindName("Tabs")).Items.Count == 0, "Declined restore or cancelled credentials opened a connection.");
+                    Require(sessionStore.Load().Length == 0, "Declined restore or cancelled credentials left stale recovery state.");
+                    window.Close();
+                }
+                Console.WriteLine("PASS: live session snapshots; tab-close removal; shutdown preservation; restore Yes/No and credential cancellation; deleted-profile filtering; persisted alphabetical/recent sort toggle; offline sessions excluded from history; saved auto-hide startup; repeated real-mouse hover/click/reopen; delayed dismissal; right-click popup lifetime; themed dropdown selection and checkbox input; confirmation Yes/No results; grouped tree; right-click Edit; existing-connection welcome; Windows Credential Manager round-trip; direct reconnect; sidebar overlay without viewport resize; RDP/Hyper-V activation; fullscreen scaling-reset recovery in normal/maximized Focus Mode; Actual Size remains unscaled; native disposal. No network connection attempted.");
                 app.Shutdown(0);
             }
             catch (Exception ex)
@@ -176,13 +369,50 @@ internal static class Program
         try { return app.Run(); }
         finally
         {
+            System.Windows.Forms.Cursor.Position = originalPointer;
             if (credentialWritten) CredentialStore.Delete(credentialTarget);
             if (Directory.Exists(sandbox)) Directory.Delete(sandbox, recursive: true);
         }
+    }
+
+    private static async Task RespondToRestorePrompt(Application app, bool reopen)
+    {
+        var prompt = await WaitForDialog<MessageDialog>(app, "Restore previous connections");
+        Require(((TextBlock)prompt.FindName("MessageText")).Text.Contains("Saved test connection"), "Restore prompt omitted the previous connection.");
+        ((Button)prompt.FindName(reopen ? "ConfirmButton" : "DismissButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        if (reopen)
+        {
+            var credentials = await WaitForDialog<CredentialsDialog>(app, "Connect");
+            Require(credentials.UserName == "restore-test-user", "Restore did not use the saved profile's current credentials.");
+            credentials.Close();
+        }
+    }
+
+    private static async Task<T> WaitForDialog<T>(Application app, string title) where T : Window
+    {
+        for (int attempt = 0; attempt < 200; attempt++)
+        {
+            if (app.Windows.OfType<T>().FirstOrDefault(w => w.Title == title && w.IsVisible) is { } dialog) return dialog;
+            await Task.Delay(25);
+        }
+        throw new InvalidOperationException($"The {title} dialog did not open.");
     }
 
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
     }
+
+    private static void Capture(FrameworkElement element, string path)
+    {
+        var image = new RenderTargetBitmap((int)Math.Ceiling(element.ActualWidth), (int)Math.Ceiling(element.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+        image.Render(element);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(image));
+        using var file = File.Create(path);
+        encoder.Save(file);
+    }
+
+    [DllImport("user32.dll", EntryPoint = "mouse_event")]
+    private static extern void MouseEvent(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
 }

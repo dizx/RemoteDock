@@ -22,8 +22,10 @@ public sealed class SessionView : UserControl, IDisposable
     private AxMsRdpClient9NotSafeForScripting? _client;
     private PixelSize _desktop;
     private PixelSize? _lastRequestedSize;
+    private int _lastRequestedDpiScale;
     private SecureString _password = new();
     private bool _reconnectQueued;
+    private bool _displayRefreshPending;
     private bool _initialized;
     private bool _loggedIn;
     private bool _disposed;
@@ -43,6 +45,7 @@ public sealed class SessionView : UserControl, IDisposable
         Content = _host;
         _host.Child = _panel;
         _panel.Resize += PanelResized;
+        _panel.DpiChangedAfterParent += PanelResized;
         _resizeTimer.Tick += ResizeRemoteDesktop;
         Loaded += OnLoaded;
     }
@@ -72,7 +75,7 @@ public sealed class SessionView : UserControl, IDisposable
                 if (_client != client || _disposed) return;
                 _loggedIn = true;
                 SetStatus(DisplayDescription());
-                QueueResize();
+                RefreshDisplay();
                 ConnectionEstablished?.Invoke(this, EventArgs.Empty);
             };
             _client.OnDisconnected += (_, args) =>
@@ -90,11 +93,13 @@ public sealed class SessionView : UserControl, IDisposable
                 if (_client != client || args.width <= 0 || args.height <= 0 || _disposed) return;
                 _desktop = new(args.width, args.height);
                 LayoutClient();
+                RefreshDisplay();
                 if (_loggedIn) SetStatus(DisplayDescription());
             };
 
             _desktop = DisplayPolicy.RequestedDesktop(Profile, PanelSize);
             _lastRequestedSize = _desktop;
+            _lastRequestedDpiScale = DisplayPolicy.RemoteDesktopScale(Profile, _panel.DeviceDpi);
             _client.Server = Profile.Host;
             _client.UserName = Profile.UserName;
             _client.Domain = Profile.Domain;
@@ -103,12 +108,16 @@ public sealed class SessionView : UserControl, IDisposable
             _client.ColorDepth = 32;
             _client.AdvancedSettings2.RDPPort = Profile.Port;
             _client.AdvancedSettings2.SmartSizing = Profile.DisplayMode == DisplayMode.ScaledFit;
+            var extended = (MSTSCLib.IMsRdpExtendedSettings)_client.GetOcx()!;
             if (Profile.DisplayMode == DisplayMode.ScaledFit)
             {
-                // SmartSizing alone only shrinks on this control. EnableZoom also permits upscaling.
                 object enableZoom = true;
-                ((MSTSCLib.IMsRdpExtendedSettings)_client.GetOcx()!).set_Property("EnableZoom", ref enableZoom);
+                extended.set_Property("EnableZoom", ref enableZoom);
             }
+            object desktopScale = (uint)_lastRequestedDpiScale;
+            object deviceScale = (uint)DisplayPolicy.RemoteDeviceScale(_lastRequestedDpiScale);
+            extended.set_Property("DesktopScaleFactor", ref desktopScale);
+            extended.set_Property("DeviceScaleFactor", ref deviceScale);
             _client.AdvancedSettings7.EnableCredSspSupport = true;
             _client.AdvancedSettings7.ConnectToAdministerServer = Profile.AdministrativeSession;
             _client.AdvancedSettings5.AuthenticationLevel = 2;
@@ -248,6 +257,41 @@ public sealed class SessionView : UserControl, IDisposable
         _resizeTimer.Start();
     }
 
+    public void RefreshDisplay()
+    {
+        if (_disposed || _displayRefreshPending) return;
+        _displayRefreshPending = true;
+        // Run after WPF layout and the native resize callback have both finished.
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _displayRefreshPending = false;
+            if (_disposed || _client is null || !IsVisible) return;
+            try
+            {
+                LayoutClient();
+                if (Profile.DisplayMode == DisplayMode.ScaledFit)
+                {
+                    _client.AdvancedSettings2.SmartSizing = true;
+                    // A remote resolution change can leave the native renderer at its old size
+                    // even when the outer control already has the right bounds. Reproduce the
+                    // resize that repairs it, without changing the host or remote resolution.
+                    var bounds = _client.Bounds;
+                    if (bounds.Width > 1)
+                    {
+                        _client.Width = bounds.Width - 1;
+                        _client.Bounds = bounds;
+                    }
+                }
+                _client.Invalidate(invalidateChildren: true);
+                QueueResize();
+            }
+            catch (Exception ex) when (ex is COMException or Forms.AxHost.InvalidActiveXStateException)
+            {
+                SetStatus($"Display refresh unavailable: {ex.Message}");
+            }
+        }), DispatcherPriority.Background);
+    }
+
     private void ResizeRemoteDesktop(object? sender, EventArgs e)
     {
         _resizeTimer.Stop();
@@ -256,11 +300,15 @@ public sealed class SessionView : UserControl, IDisposable
             return;
 
         var size = DisplayPolicy.RequestedDesktop(Profile, PanelSize);
-        if (size == _lastRequestedSize) return;
+        int dpiScale = DisplayPolicy.RemoteDesktopScale(Profile, _panel.DeviceDpi);
+        if (size == _lastRequestedSize && dpiScale == _lastRequestedDpiScale) return;
         try
         {
-            _client.UpdateSessionDisplaySettings((uint)size.Width, (uint)size.Height, 0, 0, 0, 100, 100);
+            _client.UpdateSessionDisplaySettings((uint)size.Width, (uint)size.Height, 0, 0, 0,
+                (uint)dpiScale, (uint)DisplayPolicy.RemoteDeviceScale(dpiScale));
             _lastRequestedSize = size;
+            _lastRequestedDpiScale = dpiScale;
+            RefreshDisplay();
         }
         catch (Exception ex)
         {
@@ -275,7 +323,7 @@ public sealed class SessionView : UserControl, IDisposable
         {
             if (_disposed) return;
             LayoutClient();
-            QueueResize();
+            RefreshDisplay();
             _client?.Focus();
         }), DispatcherPriority.Input);
     }
@@ -296,6 +344,7 @@ public sealed class SessionView : UserControl, IDisposable
         _resizeTimer.Tick -= ResizeRemoteDesktop;
         Loaded -= OnLoaded;
         _panel.Resize -= PanelResized;
+        _panel.DpiChangedAfterParent -= PanelResized;
         try
         {
             DisposeClient();

@@ -10,5 +10,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\RemoteDock.App\RemoteDock.App.csproj" />
+    <Reference Include="MSTSCLib">
+      <HintPath>..\..\artifacts\interop\MSTSCLib.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+    </Reference>
   </ItemGroup>
 </Project>
