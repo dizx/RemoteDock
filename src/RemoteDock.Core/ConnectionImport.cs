@@ -18,10 +18,12 @@ public sealed record ConnectionImport(ConnectionGroup[] Groups, ConnectionProfil
     {
         var groupIds = Groups.Select(g => g.Id).ToHashSet();
         var connectionIds = Connections.Select(p => p.Id).ToHashSet();
+        var history = existing.Connections.ToDictionary(p => p.Id, p => p.LastConnectedAt);
         var merged = existing with
         {
             Groups = existing.Groups.Where(g => !groupIds.Contains(g.Id)).Concat(Groups).ToArray(),
-            Connections = existing.Connections.Where(p => !connectionIds.Contains(p.Id)).Concat(Connections).ToArray()
+            Connections = existing.Connections.Where(p => !connectionIds.Contains(p.Id))
+                .Concat(Connections.Select(p => p with { LastConnectedAt = history.GetValueOrDefault(p.Id) ?? p.LastConnectedAt })).ToArray()
         };
         merged.Validate();
         return merged;

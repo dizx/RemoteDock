@@ -32,6 +32,7 @@ public sealed class SessionView : UserControl, IDisposable
     public ConnectionProfile Profile { get; private set; }
     public string Status { get; private set; } = "Preparing session";
     public event EventHandler? StatusChanged;
+    public event EventHandler? ConnectionEstablished;
 
     public SessionView(ConnectionProfile profile, string password, bool connectOnLoad = true)
     {
@@ -72,6 +73,7 @@ public sealed class SessionView : UserControl, IDisposable
                 _loggedIn = true;
                 SetStatus(DisplayDescription());
                 QueueResize();
+                ConnectionEstablished?.Invoke(this, EventArgs.Empty);
             };
             _client.OnDisconnected += (_, args) =>
             {

@@ -118,12 +118,24 @@ public sealed class ConnectionStoreTests : IDisposable
     }
 
     [Fact]
+    public void SortPreferenceAndConnectionHistorySurviveRestart()
+    {
+        var profile = new ConnectionProfile { Host = "recent.example", LastConnectedAt = DateTimeOffset.UtcNow };
+        new ConnectionStore(StorePath).SaveCatalog(new() { SortOrder = ConnectionSortOrder.LastConnected, Connections = [profile] });
+        var loaded = new ConnectionStore(StorePath).LoadCatalog();
+        Assert.Equal(ConnectionSortOrder.LastConnected, loaded.SortOrder);
+        Assert.Equal(profile, Assert.Single(loaded.Connections));
+    }
+
+    [Fact]
     public void VersionOneProfilesMigrateWithoutInventingInheritance()
     {
         Directory.CreateDirectory(_directory);
         File.WriteAllText(StorePath, "{\"Version\":1,\"Connections\":[{\"Host\":\"server\",\"UserName\":\"local-user\"}]}");
         var catalog = new ConnectionStore(StorePath).LoadCatalog();
         Assert.Equal(2, catalog.Version);
+        Assert.Equal(ConnectionSortOrder.Alphabetical, catalog.SortOrder);
+        Assert.Null(catalog.Connections[0].LastConnectedAt);
         Assert.Empty(catalog.Groups);
         Assert.Equal(InheritedSettings.None, Assert.Single(catalog.Connections).Inherit);
         Assert.Equal("local-user", catalog.Resolve(catalog.Connections[0]).UserName);

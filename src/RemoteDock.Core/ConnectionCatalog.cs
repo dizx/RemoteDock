@@ -2,6 +2,8 @@ using System.Text.Json.Serialization;
 
 namespace RemoteDock.Core;
 
+public enum ConnectionSortOrder { Alphabetical, LastConnected }
+
 public sealed record ConnectionCatalog
 {
     [JsonRequired]
@@ -10,6 +12,35 @@ public sealed record ConnectionCatalog
     public ConnectionProfile[] Connections { get; init; } = [];
     public ConnectionGroup[] Groups { get; init; } = [];
     public bool AutoHideConnections { get; init; }
+    public ConnectionSortOrder SortOrder { get; init; }
+
+    public IEnumerable<ConnectionProfile> OrderedConnections(Guid? groupId) =>
+        OrderConnections(Connections.Where(p => p.GroupId == groupId));
+
+    public IEnumerable<ConnectionProfile> OrderConnections(IEnumerable<ConnectionProfile> profiles) =>
+        profiles.OrderByDescending(p => SortOrder == ConnectionSortOrder.LastConnected ? p.LastConnectedAt : null)
+            .ThenBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase).ThenBy(p => p.Id);
+
+    public IEnumerable<ConnectionGroup> OrderedGroups(Guid? parentId)
+    {
+        var recent = new Dictionary<Guid, DateTimeOffset>();
+        if (SortOrder == ConnectionSortOrder.LastConnected)
+        {
+            foreach (var profile in Connections.Where(p => p.LastConnectedAt.HasValue))
+                foreach (var group in Ancestors(profile.GroupId))
+                    if (!recent.TryGetValue(group.Id, out var previous) || profile.LastConnectedAt!.Value > previous)
+                        recent[group.Id] = profile.LastConnectedAt!.Value;
+        }
+        return Groups.Where(g => g.ParentId == parentId)
+            .OrderByDescending(g => recent.TryGetValue(g.Id, out var time) ? (DateTimeOffset?)time : null)
+            .ThenBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ThenBy(g => g.Id);
+    }
+
+    public ConnectionCatalog RecordConnected(Guid connectionId, DateTimeOffset connectedAt) => this with
+    {
+        Connections = Connections.Select(p => p.Id == connectionId && (p.LastConnectedAt is null || p.LastConnectedAt < connectedAt)
+            ? p with { LastConnectedAt = connectedAt.ToUniversalTime() } : p).ToArray()
+    };
 
     public ConnectionProfile Resolve(ConnectionProfile profile)
     {
@@ -49,6 +80,7 @@ public sealed record ConnectionCatalog
 
     public void Validate()
     {
+        if (!Enum.IsDefined(SortOrder)) throw new InvalidDataException("Unknown connection sort order.");
         if (Connections is null || Groups is null) throw new InvalidDataException("Connections or groups are missing.");
         if (Groups.Any(g => g is null) || Connections.Any(p => p is null))
             throw new InvalidDataException("A connection or group is null.");
