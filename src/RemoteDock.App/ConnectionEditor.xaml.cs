@@ -49,6 +49,10 @@ public partial class ConnectionEditor : Window
         var scales = new List<ResolutionScale> { new(1, 4), new(1, 3), new(1, 2), new(2, 3), new(3, 4), new(1, 1) };
         if (!scales.Contains(profile.EffectiveScale)) scales.Add(profile.EffectiveScale);
         ScaleBox.ItemsSource = scales;
+        var dpiChoices = new List<DpiChoice> { new(0, "Same as local PC") };
+        dpiChoices.AddRange(new[] { 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500 }
+            .Select(percent => new DpiChoice(percent, $"{percent}%")));
+        DpiBox.ItemsSource = dpiChoices;
         SetDisplayFields(profile);
         ClipboardBox.IsChecked = profile.RedirectClipboard;
         KeysBox.IsChecked = profile.RedirectWindowsKeys;
@@ -84,7 +88,7 @@ public partial class ConnectionEditor : Window
             if (group.Defaults.Domain is null) inherit |= InheritedSettings.Domain;
             if (group.InheritPassword) inherit |= InheritedSettings.Password;
             if (group.Defaults.Port is null) inherit |= InheritedSettings.Port;
-            if (group.Defaults.DisplayMode is null && group.Defaults.Scale is null && group.Defaults.DesktopWidth is null && group.Defaults.DesktopHeight is null)
+            if (group.Defaults.DisplayMode is null && group.Defaults.Scale is null && group.Defaults.RemoteDpiScalePercent is null && group.Defaults.DesktopWidth is null && group.Defaults.DesktopHeight is null)
                 inherit |= InheritedSettings.Display;
             if (group.Defaults.RedirectClipboard is null) inherit |= InheritedSettings.Clipboard;
             if (group.Defaults.RedirectWindowsKeys is null) inherit |= InheritedSettings.WindowsKeys;
@@ -161,6 +165,13 @@ public partial class ConnectionEditor : Window
             ScaleBox.Items.Refresh();
         }
         ScaleBox.SelectedItem = profile.EffectiveScale;
+        var dpiChoices = (List<DpiChoice>)DpiBox.ItemsSource;
+        if (!dpiChoices.Any(choice => choice.Percent == profile.RemoteDpiScalePercent))
+        {
+            dpiChoices.Add(new(profile.RemoteDpiScalePercent, $"{profile.RemoteDpiScalePercent}%"));
+            DpiBox.Items.Refresh();
+        }
+        DpiBox.SelectedItem = dpiChoices.First(choice => choice.Percent == profile.RemoteDpiScalePercent);
         WidthBox.Text = profile.DesktopWidth.ToString();
         HeightBox.Text = profile.DesktopHeight.ToString();
     }
@@ -187,6 +198,7 @@ public partial class ConnectionEditor : Window
             if (!int.TryParse(PortBox.Text, out int port) || !int.TryParse(WidthBox.Text, out int width) || !int.TryParse(HeightBox.Text, out int height))
                 throw new ArgumentException("Port and resolution must be whole numbers.");
             if (ScaleBox.SelectedItem is not ResolutionScale scale) throw new ArgumentException("Select a resolution scale.");
+            if (DpiBox.SelectedItem is not DpiChoice dpi) throw new ArgumentException("Select a remote DPI scale.");
             if (RememberPassword && !_hasSavedPassword && PasswordInput.Password.Length == 0)
                 throw new ArgumentException("Enter a password to save, or uncheck the saved-password option.");
             if (_group is not null)
@@ -202,6 +214,7 @@ public partial class ConnectionEditor : Window
                         Port = inherit.HasFlag(InheritedSettings.Port) ? null : port,
                         DisplayMode = inherit.HasFlag(InheritedSettings.Display) ? null : (DisplayMode)DisplayBox.SelectedIndex,
                         Scale = inherit.HasFlag(InheritedSettings.Display) ? null : scale,
+                        RemoteDpiScalePercent = inherit.HasFlag(InheritedSettings.Display) ? null : dpi.Percent,
                         DesktopWidth = inherit.HasFlag(InheritedSettings.Display) ? null : width,
                         DesktopHeight = inherit.HasFlag(InheritedSettings.Display) ? null : height,
                         RedirectClipboard = inherit.HasFlag(InheritedSettings.Clipboard) ? null : ClipboardBox.IsChecked == true,
@@ -228,6 +241,7 @@ public partial class ConnectionEditor : Window
                     AdministrativeSession = AdministrativeBox.IsChecked == true,
                     UserName = UserBox.Text.Trim(), Domain = DomainBox.Text.Trim(),
                     DisplayMode = (DisplayMode)DisplayBox.SelectedIndex, Scale = scale,
+                    RemoteDpiScalePercent = dpi.Percent,
                     DesktopWidth = width, DesktopHeight = height,
                     RedirectClipboard = ClipboardBox.IsChecked == true, RedirectWindowsKeys = KeysBox.IsChecked == true
                 };
@@ -241,4 +255,5 @@ public partial class ConnectionEditor : Window
     }
 
     private sealed record GroupChoice(Guid? Id, string Label);
+    private sealed record DpiChoice(int Percent, string Label);
 }

@@ -16,8 +16,8 @@
     <PasswordBox x:Name="MasterPassword" AutomationProperties.Name="mRemoteNG master password" />
     <TextBlock x:Name="ErrorText" Foreground="#FFAFA8" TextWrapping="Wrap" Margin="0,4,0,12" />
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-      <Button Content="Cancel" IsCancel="True" />
       <Button x:Name="ImportButton" Content="Import connections" IsDefault="True" Click="Import_Click" />
+      <Button Content="Cancel" IsCancel="True" />
     </StackPanel>
   </StackPanel>
 </Window>

@@ -8,8 +8,8 @@
     <StackPanel DockPanel.Dock="Bottom">
       <TextBlock x:Name="ErrorText" Foreground="#FFAFA8" TextWrapping="Wrap" Margin="0,8" />
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-        <Button Content="Cancel" IsCancel="True" />
         <Button x:Name="SaveButton" Content="Save connection" IsDefault="True" Click="Save_Click" />
+        <Button Content="Cancel" IsCancel="True" />
       </StackPanel>
     </StackPanel>
     <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -63,6 +63,10 @@
         <TextBlock Text="Scaled Fit resolution (fraction of panel dimensions)" />
         <ComboBox x:Name="ScaleBox" AutomationProperties.Name="Resolution scale fraction" />
         <TextBlock Text="For a 3840 × 2160 panel: 1/2 requests 1920 × 1080; 2/3 requests 2560 × 1440. The remote resolution follows window resizing."
+                   TextWrapping="Wrap" Foreground="#A9BBCD" Margin="0,0,0,10" />
+        <TextBlock Text="Remote DPI / scale" />
+        <ComboBox x:Name="DpiBox" DisplayMemberPath="Label" AutomationProperties.Name="Remote DPI scale" />
+        <TextBlock Text="Controls text and icon size inside Windows on the remote PC. Same as local PC follows your monitor's Windows scaling. Reconnect to apply; some remote systems require signing out and back in."
                    TextWrapping="Wrap" Foreground="#A9BBCD" Margin="0,0,0,10" />
         <TextBlock Text="Fixed resolution (Actual Size / basic Hyper-V request)" />
         <Grid>
