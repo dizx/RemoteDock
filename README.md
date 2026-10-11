@@ -2,6 +2,18 @@
 
 A Windows remote desktop connection manager built with C#, .NET 10, and WPF.
 
+## A better fit for older applications
+
+RemoteDock is especially useful for older applications that struggle with Windows
+DPI scaling: tiny text, clipped controls, or broken layouts on high-resolution
+screens. Use **Scaled Fit** with **Remote DPI / scale** set to **100%** to let the
+application render at its normal scale, then enlarge the whole remote desktop
+locally to fit your window.
+
+For example, on a 4K panel, **1/2 resolution** requests a 1920 × 1080 remote
+desktop and scales it up to fill the panel. This makes older interfaces easier
+to read without relying on the application's own high-DPI support.
+
 ## First working slice
 
 - Saved RDP and Hyper-V console connections, search, and independent session tabs.
