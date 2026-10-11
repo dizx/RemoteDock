@@ -3,13 +3,80 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Style="{StaticResource {x:Type Window}}"
         Title="RemoteDock" Width="1280" Height="820" MinWidth="780" MinHeight="480"
-        PreviewKeyDown="Window_KeyDown" Closing="Window_Closing">
+        PreviewKeyDown="Window_KeyDown" PreviewMouseDown="Window_PreviewMouseDown" Deactivated="Window_Deactivated"
+        Closing="Window_Closing" FontSize="12" UseLayoutRounding="True">
+  <Window.Resources>
+    <Style x:Key="CompactTreeItemStyle" TargetType="TreeViewItem">
+      <Setter Property="Padding" Value="2,0,0,0" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TreeViewItem">
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="12" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+              <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+              <ToggleButton x:Name="Expander" Width="12" Focusable="False" ClickMode="Press"
+                            IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="ToggleButton">
+                    <Border Background="Transparent">
+                      <Path x:Name="Arrow" Data="M0,0 L4,3 L0,6" Stroke="#A9BBCD" StrokeThickness="1.2"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsChecked" Value="True">
+                        <Setter TargetName="Arrow" Property="RenderTransform"><Setter.Value><RotateTransform Angle="90" /></Setter.Value></Setter>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+              </ToggleButton>
+              <Border x:Name="HeaderFrame" Grid.Column="1" Background="Transparent" BorderBrush="Transparent"
+                      BorderThickness="1" CornerRadius="3" Padding="{TemplateBinding Padding}">
+                <ContentPresenter x:Name="PART_Header" ContentSource="Header"
+                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center" />
+              </Border>
+              <ItemsPresenter x:Name="ItemsHost" Grid.Row="1" Grid.Column="1" />
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="HasItems" Value="False"><Setter TargetName="Expander" Property="Visibility" Value="Hidden" /></Trigger>
+              <Trigger Property="IsExpanded" Value="False"><Setter TargetName="ItemsHost" Property="Visibility" Value="Collapsed" /></Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="HeaderFrame" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="HeaderFrame" Property="BorderBrush" Value="#74C7D8" /></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45" /></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="ConnectionTreeItemStyle" TargetType="TreeViewItem" BasedOn="{StaticResource CompactTreeItemStyle}">
+      <Style.Resources>
+        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#2D4154" />
+        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#2D4154" />
+      </Style.Resources>
+    </Style>
+    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Padding" Value="8,3" />
+      <Setter Property="Margin" Value="2,0" />
+    </Style>
+    <Style x:Key="SidebarActionButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Width" Value="34" />
+      <Setter Property="Height" Value="30" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Margin" Value="0,0,6,0" />
+      <Setter Property="Background" Value="#223140" />
+      <Setter Property="BorderBrush" Value="#354A61" />
+      <Setter Property="ToolTipService.InitialShowDelay" Value="250" />
+    </Style>
+  </Window.Resources>
   <Grid>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
       <RowDefinition Height="*" /><RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
-    <Border x:Name="Toolbar" Background="#0B1018" BorderBrush="#253343" BorderThickness="0,0,0,1" Padding="16,9">
+    <Border x:Name="Toolbar" Background="#0B1018" BorderBrush="#253343" BorderThickness="0,0,0,1" Padding="10,4">
       <DockPanel>
         <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
           <Button x:Name="ReconnectButton" Content="Reconnect" IsEnabled="False" Click="Reconnect_Click" ToolTip="Reconnect the active session with its credentials" />
@@ -18,11 +85,8 @@
           <Button x:Name="AboutButton" Content="About ⓘ" Click="About_Click" ToolTip="About RemoteDock" AutomationProperties.Name="About RemoteDock" />
         </StackPanel>
         <StackPanel Orientation="Horizontal">
-          <Image Source="{StaticResource RemoteDockMark}" Width="38" Height="38" Margin="0,0,11,0" />
-          <StackPanel VerticalAlignment="Center">
-            <TextBlock Text="RemoteDock" FontSize="22" FontWeight="SemiBold" />
-            <TextBlock Text="Your connections. More room to work." Foreground="#A9BBCD" FontSize="11" />
-          </StackPanel>
+          <Image Source="{StaticResource RemoteDockMark}" Width="24" Height="24" Margin="0,0,7,0" />
+          <TextBlock Text="RemoteDock" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
         </StackPanel>
       </DockPanel>
     </Border>
@@ -38,9 +102,9 @@
       </DockPanel>
     </Border>
     <Grid x:Name="Workspace" Grid.Row="2" SizeChanged="Workspace_SizeChanged">
-      <Grid.ColumnDefinitions><ColumnDefinition x:Name="SidebarColumn" Width="260" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-      <Border x:Name="SidebarRail" Background="{StaticResource Surface}" Visibility="Collapsed" MouseEnter="RevealSidebar">
-        <Button x:Name="SidebarRevealButton" Content="Connections" Padding="5" Margin="0" Click="RevealSidebar"
+      <Grid.ColumnDefinitions><ColumnDefinition x:Name="SidebarColumn" Width="240" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+      <Border x:Name="SidebarRail" Background="{StaticResource Surface}" Visibility="Collapsed" MouseEnter="RevealSidebar" MouseLeave="Sidebar_MouseLeave">
+        <Button x:Name="SidebarRevealButton" Content="Connections" Padding="4,1" FontSize="11" Margin="0" Click="RevealSidebar"
                 GotKeyboardFocus="RevealSidebar" ToolTip="Show connections">
           <Button.LayoutTransform><RotateTransform Angle="-90" /></Button.LayoutTransform>
         </Button>
@@ -48,37 +112,72 @@
       <ContentControl x:Name="SidebarDockHost">
       <Border x:Name="Sidebar" Background="{StaticResource Surface}" BorderBrush="#304055" BorderThickness="0,1,1,0"
               MouseEnter="Sidebar_MouseEnter" MouseLeave="Sidebar_MouseLeave" LostKeyboardFocus="Sidebar_LostKeyboardFocus">
-        <DockPanel Margin="14">
+        <DockPanel Margin="6,10,10,10">
           <StackPanel DockPanel.Dock="Top">
-            <TextBlock Text="CONNECTIONS" FontWeight="SemiBold" Foreground="#A9BBCD" Margin="0,8,0,12" />
+            <TextBlock Text="CONNECTIONS" FontWeight="SemiBold" Foreground="#A9BBCD" Margin="0,2,0,6" />
             <CheckBox x:Name="AutoHideBox" Content="Auto-hide panel" Click="AutoHide_Click" />
             <TextBlock Text="Search connections" Foreground="#A9BBCD" FontSize="11" />
-            <TextBox x:Name="SearchBox" TextChanged="Search_Changed" ToolTip="Search by connection name or host" AutomationProperties.Name="Search connections" />
-            <Button Content="+ New connection" Click="New_Click" Margin="0,0,0,4" HorizontalContentAlignment="Left" />
-            <Button Content="+ New group" Click="NewGroup_Click" Margin="0,0,0,12" HorizontalContentAlignment="Left" />
-            <Button x:Name="ImportButton" Content="Import connections…" Click="Import_Click" Margin="0,0,0,12" />
-          </StackPanel>
-          <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
-            <Button Content="Connect" Click="Connect_Click" Margin="0,3" />
-            <StackPanel Orientation="Horizontal">
-              <Button Content="Edit" Click="Edit_Click" />
-              <Button Content="Delete" Click="Delete_Click" />
+            <TextBox x:Name="SearchBox" Padding="6,3" Margin="0,3,0,6" TextChanged="Search_Changed" ToolTip="Search by connection name or host" AutomationProperties.Name="Search connections" />
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+              <Button Style="{StaticResource SidebarActionButton}" Click="New_Click"
+                      ToolTip="New connection" AutomationProperties.Name="New connection">
+                <Path Width="20" Height="20" Stroke="#88E0D0" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                      Data="M3,2 H15 Q16,2 16,3 V10 Q16,11 15,11 H3 Q2,11 2,10 V3 Q2,2 3,2 Z M8,11 V16 M5,16 H10 M15,12 V18 M12,15 H18" />
+              </Button>
+              <Button Style="{StaticResource SidebarActionButton}" Click="NewGroup_Click"
+                      ToolTip="New group" AutomationProperties.Name="New group">
+                <Path Width="20" Height="20" Stroke="#C7B5F0" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                      Data="M2,5 H8 L10,7 H18 V17 H2 Z M10,9 V15 M7,12 H13" />
+              </Button>
+              <Button x:Name="ImportButton" Style="{StaticResource SidebarActionButton}" Click="Import_Click"
+                      ToolTip="Import connections" AutomationProperties.Name="Import connections">
+                <Path Width="20" Height="20" Stroke="#94CFFF" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                      Data="M10,2 V12 M6,8 L10,12 L14,8 M3,12 V17 H17 V12" />
+              </Button>
+              <Button x:Name="SortButton" Style="{StaticResource SidebarActionButton}" Click="Sort_Click"
+                      ToolTip="Sorted alphabetically · Click for last connected" AutomationProperties.Name="Sort connections">
+                <Grid Width="20" Height="20">
+                  <Path x:Name="AlphabeticalSortIcon" Stroke="#E6CCA0" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                        Data="M2,14 L6,3 L10,14 M3.5,10 H8.5 M15,3 V17 M12,14 L15,17 L18,14" />
+                  <Path x:Name="RecentSortIcon" Visibility="Collapsed" Stroke="#E6CCA0" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                        Data="M10,2 A8,8 0 1 1 2,10 A8,8 0 0 1 10,2 M10,5 V10 L14,12" />
+                </Grid>
+              </Button>
             </StackPanel>
           </StackPanel>
-          <TreeView x:Name="ConnectionsList" Background="Transparent" Foreground="White" BorderThickness="0"
+          <Button DockPanel.Dock="Bottom" Content="Connect" Click="Connect_Click" Margin="0,6,0,0" />
+          <TreeView x:Name="ConnectionsList" Background="Transparent" Foreground="White" BorderThickness="0" Padding="0"
                    MouseDoubleClick="Connection_DoubleClick" KeyDown="Connection_KeyDown" SelectedItemChanged="Connection_Selected"
                    PreviewMouseRightButtonDown="Connection_RightClick"
-                   ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="Saved connections">
+                    ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="Saved connections">
+            <TreeView.Resources>
+              <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="Transparent" />
+              <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="Transparent" />
+              <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#EDF2F7" />
+              <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="#EDF2F7" />
+            </TreeView.Resources>
             <TreeView.ContextMenu>
-              <ContextMenu>
-                <MenuItem Header="Connect" Click="Connect_Click" />
-                <MenuItem Header="Connect as…" Click="ConnectAs_Click" />
-                <Separator />
-                <MenuItem Header="Edit" Click="Edit_Click" />
-                <MenuItem Header="Delete" Click="Delete_Click" />
-                <Separator />
-                <MenuItem Header="New connection" Click="New_Click" />
-                <MenuItem Header="New group" Click="NewGroup_Click" />
+              <ContextMenu Closed="ConnectionsMenu_Closed">
+                <MenuItem Header="Connect" Click="Connect_Click">
+                  <MenuItem.Icon><TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE768;" Foreground="#88E0D0" /></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Connect as…" Click="ConnectAs_Click">
+                  <MenuItem.Icon><TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE77B;" /></MenuItem.Icon>
+                </MenuItem>
+                <Separator Style="{StaticResource {x:Type Separator}}" />
+                <MenuItem Header="Edit" Click="Edit_Click">
+                  <MenuItem.Icon><TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE70F;" /></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Delete" Click="Delete_Click">
+                  <MenuItem.Icon><TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE74D;" Foreground="#F0ACAC" /></MenuItem.Icon>
+                </MenuItem>
+                <Separator Style="{StaticResource {x:Type Separator}}" />
+                <MenuItem Header="New connection" Click="New_Click">
+                  <MenuItem.Icon><TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE710;" Foreground="#88E0D0" /></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="New group" Click="NewGroup_Click">
+                  <MenuItem.Icon><TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8F4;" Foreground="#C7B5F0" /></MenuItem.Icon>
+                </MenuItem>
               </ContextMenu>
             </TreeView.ContextMenu>
           </TreeView>
@@ -87,7 +186,7 @@
       </ContentControl>
       <Grid Grid.Column="1">
         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
-        <ListBox x:Name="Tabs" Background="#101722" Foreground="White" BorderThickness="0" MinHeight="40"
+        <ListBox x:Name="Tabs" Background="#101722" Foreground="White" BorderThickness="0" Padding="0" MinHeight="28"
                  SelectionChanged="Tab_Changed" ScrollViewer.HorizontalScrollBarVisibility="Auto"
                  ScrollViewer.VerticalScrollBarVisibility="Disabled" AutomationProperties.Name="Session tabs">
           <ListBox.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ListBox.ItemsPanel>
@@ -104,9 +203,9 @@
       </Grid>
     </Grid>
     <Popup x:Name="SidebarPopup" Placement="Right" PlacementTarget="{Binding ElementName=SidebarRail}"
-           AllowsTransparency="True" StaysOpen="False" PopupAnimation="Slide" Closed="SidebarPopup_Closed" />
-    <Border x:Name="StatusBar" Grid.Row="3" Background="{StaticResource Surface}" Padding="16,7">
-      <TextBlock x:Name="StatusText" Text="Ready" Foreground="#A9BBCD" TextTrimming="CharacterEllipsis" />
+           AllowsTransparency="True" StaysOpen="True" PopupAnimation="None" Closed="SidebarPopup_Closed" />
+    <Border x:Name="StatusBar" Grid.Row="3" Background="{StaticResource Surface}" Padding="10,2">
+      <TextBlock x:Name="StatusText" Text="Ready" FontSize="11" Foreground="#A9BBCD" TextTrimming="CharacterEllipsis" />
     </Border>
   </Grid>
 </Window>

@@ -70,6 +70,21 @@ Copyright (c) 2026 Morten Aasheim.
 
 ## Connecting
 
+RemoteDock remembers open connection tabs as you work. After a normal exit or an
+unexpected shutdown, the next launch asks whether to reopen them. Choose **Yes**
+to reconnect using the current saved settings and credentials, or **No** to start
+with no sessions. Connections you explicitly close or delete are not reopened.
+The recovery list contains only connection IDs in `%LOCALAPPDATA%\RemoteDock\sessions.json`;
+passwords are not stored there.
+
+**Remote DPI / scale** in the connection or group editor defaults to **Same as
+local PC** (the Windows scaling of the monitor displaying RemoteDock). Select a
+percentage from 100% to 500% to request a different text and icon size inside the
+remote Windows session. This is independent of the Scaled Fit resolution fraction.
+It inherits with group display settings and is preserved when importing an RDP
+file's `desktopscalefactor`. Reconnect after changing it; some remote systems
+require signing out and back in before Windows applies a different DPI.
+
 Create a connection, choose its display mode, save, and select **Connect**.
 Choose the fraction under **Scaled Fit resolution** in the connection editor.
 Connection profiles live in `%LOCALAPPDATA%\RemoteDock\connections.json`.

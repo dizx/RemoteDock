@@ -15,6 +15,10 @@ namespace RemoteDock.App;
 public partial class MainWindow : Window
 {
     private readonly ConnectionStore _store;
+    private readonly SessionStore? _sessionStore;
+    private bool _sessionStateReady;
+    private bool _restoringSessions;
+    private bool _closing;
     private ConnectionCatalog _catalog = new();
     private readonly DispatcherTimer _sidebarHideTimer = new() { Interval = TimeSpan.FromMilliseconds(650) };
     private bool _storeReadable = true;
@@ -25,11 +29,13 @@ public partial class MainWindow : Window
     private object? SelectedEntry => (ConnectionsList.SelectedItem as TreeViewItem)?.Tag;
     private Guid? SelectedGroupId => SelectedEntry switch { ConnectionGroup g => g.Id, ConnectionProfile p => p.GroupId, _ => null };
 
-    public MainWindow() : this(new ConnectionStore(Path.Combine(App.DataDirectory, "connections.json"))) { }
+    public MainWindow() : this(new ConnectionStore(Path.Combine(App.DataDirectory, "connections.json")),
+        new SessionStore(Path.Combine(App.DataDirectory, "sessions.json"))) { }
 
-    internal MainWindow(ConnectionStore store)
+    internal MainWindow(ConnectionStore store, SessionStore? sessionStore = null)
     {
         _store = store;
+        _sessionStore = sessionStore;
         InitializeComponent();
         _sidebarHideTimer.Tick += HideSidebarAfterDelay;
         try { _catalog = _store.LoadCatalog(); }
@@ -37,13 +43,65 @@ public partial class MainWindow : Window
         {
             _storeReadable = false;
             StatusText.Text = $"Connections could not be loaded: {ex.Message}";
-            Loaded += (_, _) => MessageBox.Show(this,
+            Loaded += (_, _) => MessageDialog.ShowMessage(this,
                 $"The connection file could not be read and has been preserved.\n\n{ex.Message}\n\n{App.DataDirectory}",
                 "Connection file", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         AutoHideBox.IsChecked = _catalog.AutoHideConnections;
         RefreshConnections();
         UpdateSidebarLayout();
+        ContentRendered += RestorePreviousConnections;
+    }
+
+    private void RestorePreviousConnections(object? sender, EventArgs e)
+    {
+        ContentRendered -= RestorePreviousConnections;
+        if (_sessionStore is null || !_storeReadable || _closing) return;
+        try
+        {
+            var profiles = _catalog.Connections.ToDictionary(p => p.Id);
+            var previous = _sessionStore.Load().Where(profiles.ContainsKey).Select(id => profiles[id]).ToArray();
+            _sessionStateReady = true;
+            if (previous.Length == 0) return;
+
+            _restoringSessions = true;
+            string names = string.Join(Environment.NewLine, previous.Select(p => p.Name));
+            var answer = MessageDialog.ShowMessage(this,
+                $"Reopen the connections from your previous session?\n\n{names}",
+                "Restore previous connections", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer == MessageBoxResult.Yes)
+            {
+                foreach (var profile in previous)
+                {
+                    if (_closing) break;
+                    Connect(profile);
+                }
+            }
+            _restoringSessions = false;
+            SaveOpenSessions();
+        }
+        catch (Exception ex)
+        {
+            _sessionStateReady = true;
+            StatusText.Text = $"Previous connections could not be restored: {ex.Message}";
+            StatusText.ToolTip = StatusText.Text;
+        }
+        finally { _restoringSessions = false; }
+    }
+
+    private void SaveOpenSessions()
+    {
+        if (_sessionStore is null || !_sessionStateReady || _restoringSessions || _closing) return;
+        try
+        {
+            var knownIds = _catalog.Connections.Select(p => p.Id).ToHashSet();
+            _sessionStore.Save(Tabs.Items.Cast<ListBoxItem>().Select(t => ((SessionView)t.Tag).Profile.Id).Where(knownIds.Contains));
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Open connections could not be remembered: {ex.Message}";
+            StatusText.ToolTip = StatusText.Text;
+        }
     }
 
     private static Guid? EntryId(object? entry) => entry switch { ConnectionProfile p => p.Id, ConnectionGroup g => g.Id, _ => null };
@@ -60,23 +118,25 @@ public partial class MainWindow : Window
         List<TreeViewItem> Build(Guid? parent, bool includeAll)
         {
             var items = new List<TreeViewItem>();
-            foreach (var group in _catalog.Groups.Where(g => g.ParentId == parent).OrderBy(g => g.Name))
+            foreach (var group in _catalog.OrderedGroups(parent))
             {
                 bool groupMatch = includeAll || Matches(group.Name);
                 var children = Build(group.Id, groupMatch);
                 if (!groupMatch && children.Count == 0) continue;
-                var item = new TreeViewItem { Header = $"▸  {group.Name}", Tag = group,
+                var item = new TreeViewItem { Header = group.Name, Tag = group, Foreground = ConnectionsList.Foreground,
+                    Style = (Style)FindResource("CompactTreeItemStyle"),
                     IsExpanded = search.Length > 0 || !expanded.TryGetValue(group.Id, out bool wasExpanded) || wasExpanded,
-                    Margin = new Thickness(0, 5, 0, 5) };
+                    Margin = new Thickness(0, 2, 0, 2) };
                 foreach (var child in children) item.Items.Add(child);
                 items.Add(item);
             }
-            foreach (var profile in _catalog.Connections.Where(p => p.GroupId == parent && (includeAll || Matches(p.Name) || Matches(p.Host))).OrderBy(p => p.Name))
+            foreach (var profile in _catalog.OrderedConnections(parent).Where(p => includeAll || Matches(p.Name) || Matches(p.Host)))
             {
-                var header = new StackPanel { Margin = new Thickness(4, 7, 0, 7) };
+                var header = new StackPanel { Margin = new Thickness(0, 3, 0, 3) };
                 header.Children.Add(new TextBlock { Text = profile.Name, FontWeight = FontWeights.SemiBold });
                 header.Children.Add(new TextBlock { Text = profile.Host, FontSize = 11, Foreground = new SolidColorBrush(Color.FromRgb(145, 165, 187)) });
-                var item = new TreeViewItem { Header = header, Tag = profile, ToolTip = profile.Host };
+                var item = new TreeViewItem { Header = header, Tag = profile, ToolTip = profile.Host, Foreground = ConnectionsList.Foreground,
+                    Style = (Style)FindResource("ConnectionTreeItemStyle") };
                 System.Windows.Automation.AutomationProperties.SetName(item, profile.Name);
                 items.Add(item);
             }
@@ -87,7 +147,24 @@ public partial class MainWindow : Window
         foreach (var item in Build(null, search.Length == 0)) ConnectionsList.Items.Add(item);
         var selected = TreeItems(ConnectionsList.Items).FirstOrDefault(i => EntryId(i.Tag) == selectedId);
         if (selected is not null) selected.IsSelected = true;
+        UpdateSortButton();
         UpdateWelcome();
+    }
+
+    private void Sort_Click(object sender, RoutedEventArgs e)
+    {
+        var order = _catalog.SortOrder == ConnectionSortOrder.Alphabetical ? ConnectionSortOrder.LastConnected : ConnectionSortOrder.Alphabetical;
+        if (SaveCatalog(_catalog with { SortOrder = order })) RefreshConnections();
+    }
+
+    private void UpdateSortButton()
+    {
+        bool recent = _catalog.SortOrder == ConnectionSortOrder.LastConnected;
+        AlphabeticalSortIcon.Visibility = recent ? Visibility.Collapsed : Visibility.Visible;
+        RecentSortIcon.Visibility = recent ? Visibility.Visible : Visibility.Collapsed;
+        SortButton.ToolTip = recent ? "Sorted by last connected · Click for alphabetical" : "Sorted alphabetically · Click for last connected";
+        System.Windows.Automation.AutomationProperties.SetName(SortButton,
+            recent ? "Sort connections: last connected" : "Sort connections: alphabetical");
     }
 
     private static IEnumerable<TreeViewItem> TreeItems(ItemCollection items)
@@ -146,8 +223,8 @@ public partial class MainWindow : Window
         if (!CommitImport(imported)) return;
         RefreshConnections(imported.Connections.FirstOrDefault()?.Id);
         int passwords = imported.Passwords.Count(p => !string.IsNullOrEmpty(p.Password) || p.WindowsProtected is not null);
-        StatusText.Text = $"Imported {imported.Connections.Length} connections, {imported.Groups.Length} groups and {passwords} passwords. Skipped {imported.SkippedCount} unsupported items.";
-        if (imported.Warnings.Count > 0) MessageBox.Show(this, string.Join(Environment.NewLine, imported.Warnings.Distinct()), "Import notes");
+        StatusText.Text = $"Imported {imported.Connections.Length} connections, {imported.Groups.Length} groups and {passwords} passwords. Skipped {imported.SkippedCount} items.";
+        if (imported.Warnings.Count > 0) MessageDialog.ShowMessage(this, string.Join(Environment.NewLine, imported.Warnings.Distinct()), "Import notes");
     }
 
     internal bool CommitImport(ConnectionImport imported)
@@ -238,7 +315,7 @@ public partial class MainWindow : Window
     {
         if (SelectedEntry is ConnectionProfile profile)
         {
-            if (MessageBox.Show(this, $"Delete saved connection '{profile.Name}' and its saved password?", "Delete connection",
+            if (MessageDialog.ShowMessage(this, $"Delete saved connection '{profile.Name}' and its saved password?", "Delete connection",
                 MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             if (SaveCatalog(_catalog with { Connections = _catalog.Connections.Where(p => p.Id != profile.Id).ToArray() }, CredentialStore.ConnectionTarget(profile.Id), false)) RefreshConnections();
         }
@@ -246,10 +323,10 @@ public partial class MainWindow : Window
         {
             if (_catalog.Connections.Any(p => p.GroupId == group.Id) || _catalog.Groups.Any(g => g.ParentId == group.Id))
             {
-                MessageBox.Show(this, "Move this group's connections and subgroups before deleting it.", "Group is not empty");
+                MessageDialog.ShowMessage(this, "Move this group's connections and subgroups before deleting it.", "Group is not empty");
                 return;
             }
-            if (MessageBox.Show(this, $"Delete group '{group.Name}' and its shared password?", "Delete group", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+            if (MessageDialog.ShowMessage(this, $"Delete group '{group.Name}' and its shared password?", "Delete group", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
             if (SaveCatalog(_catalog with { Groups = _catalog.Groups.Where(g => g.Id != group.Id).ToArray() }, CredentialStore.GroupTarget(group.Id), false)) RefreshConnections();
         }
     }
@@ -325,19 +402,21 @@ public partial class MainWindow : Window
     {
         var session = new SessionView(profile, password, connect);
         session.StatusChanged += Session_StatusChanged;
+        session.ConnectionEstablished += Session_ConnectionEstablished;
         var header = new StackPanel { Orientation = Orientation.Horizontal };
-        header.Children.Add(new TextBlock { Text = profile.Name, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 8, 0) });
-        var close = new Button { Content = "×", Padding = new Thickness(6, 1, 6, 1), ToolTip = "Close and disconnect session" };
+        header.Children.Add(new TextBlock { Text = profile.Name, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(5, 0, 6, 0) });
+        var close = new Button { Content = "×", Width = 20, Height = 20, Padding = new Thickness(0), Margin = new Thickness(0), ToolTip = "Close and disconnect session" };
         close.Click += (_, e) => { e.Handled = true; CloseSession(session); };
         header.Children.Add(close);
-        var tab = new ListBoxItem { Content = header, Tag = session, ToolTip = profile.Host, ContextMenu = new ContextMenu() };
-        var edit = new MenuItem { Header = "Edit connection" };
+        var tab = new ListBoxItem { Content = header, Tag = session, Padding = new Thickness(3, 2, 3, 2), ToolTip = profile.Host, ContextMenu = new ContextMenu() };
+        var edit = new MenuItem { Header = "Edit connection", Icon = new TextBlock { FontFamily = new FontFamily("Segoe MDL2 Assets"), Text = "\uE70F" } };
         edit.Click += (_, _) => { if (_catalog.Connections.FirstOrDefault(p => p.Id == session.Profile.Id) is { } saved) EditConnection(saved); };
         tab.ContextMenu.Items.Add(edit);
         SessionSurface.Children.Add(session);
         Tabs.Items.Add(tab);
         Tabs.SelectedItem = tab;
         UpdateWelcome();
+        SaveOpenSessions();
         return session;
     }
 
@@ -350,6 +429,22 @@ public partial class MainWindow : Window
     }
 
     private void Session_StatusChanged(object? sender, EventArgs e) => UpdateStatus();
+    private void Session_ConnectionEstablished(object? sender, EventArgs e)
+    {
+        if (!_storeReadable || sender is not SessionView session || !_catalog.Connections.Any(p => p.Id == session.Profile.Id)) return;
+        var updated = _catalog.RecordConnected(session.Profile.Id, DateTimeOffset.UtcNow);
+        try
+        {
+            _store.SaveCatalog(updated);
+            _catalog = updated;
+            RefreshConnections();
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Connected, but last-connected history could not be saved: {ex.Message}";
+            StatusText.ToolTip = StatusText.Text;
+        }
+    }
     private void UpdateStatus()
     {
         StatusText.Text = ActiveSession?.Status ?? "Ready";
@@ -363,7 +458,7 @@ public partial class MainWindow : Window
     {
         if (WelcomeAction is null) return;
         Welcome.Visibility = Tabs.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        var profile = SelectedEntry as ConnectionProfile ?? _catalog.Connections.OrderBy(p => p.Name).FirstOrDefault();
+        var profile = SelectedEntry as ConnectionProfile ?? _catalog.OrderConnections(_catalog.Connections).FirstOrDefault();
         WelcomeAction.Content = profile is null ? "Add your first connection" : $"Connect to {profile.Name}";
         WelcomeDescription.Text = profile is null
             ? "Connect to a Windows desktop or Hyper-V console. Fit your workspace with fewer remote pixels and more room to work."
@@ -372,7 +467,7 @@ public partial class MainWindow : Window
 
     private void Welcome_Click(object sender, RoutedEventArgs e)
     {
-        var profile = SelectedEntry as ConnectionProfile ?? _catalog.Connections.OrderBy(p => p.Name).FirstOrDefault();
+        var profile = SelectedEntry as ConnectionProfile ?? _catalog.OrderConnections(_catalog.Connections).FirstOrDefault();
         if (profile is null) EditConnection(null); else Connect(profile);
     }
 
@@ -380,12 +475,14 @@ public partial class MainWindow : Window
     {
         var tab = Tabs.Items.Cast<ListBoxItem>().FirstOrDefault(t => ReferenceEquals(t.Tag, session));
         session.StatusChanged -= Session_StatusChanged;
+        session.ConnectionEstablished -= Session_ConnectionEstablished;
         session.Dispose();
         SessionSurface.Children.Remove(session);
         if (tab is not null) Tabs.Items.Remove(tab);
         if (Tabs.SelectedItem is null && Tabs.Items.Count > 0) Tabs.SelectedIndex = Tabs.Items.Count - 1;
         UpdateWelcome();
         UpdateStatus();
+        SaveOpenSessions();
     }
 
     private void Reconnect_Click(object sender, RoutedEventArgs e)
@@ -414,7 +511,7 @@ public partial class MainWindow : Window
         {
             SidebarDockHost.Content = null;
             SidebarPopup.Child = Sidebar;
-            Sidebar.Width = 280;
+            Sidebar.Width = 240;
         }
         else
         {
@@ -425,7 +522,7 @@ public partial class MainWindow : Window
         Sidebar.Visibility = _focusMode ? Visibility.Collapsed : Visibility.Visible;
         SidebarDockHost.Visibility = _focusMode || _catalog.AutoHideConnections ? Visibility.Collapsed : Visibility.Visible;
         SidebarRail.Visibility = !_focusMode && _catalog.AutoHideConnections ? Visibility.Visible : Visibility.Collapsed;
-        SidebarColumn.Width = new GridLength(_focusMode ? 0 : _catalog.AutoHideConnections ? 32 : 260);
+        SidebarColumn.Width = new GridLength(_focusMode ? 0 : _catalog.AutoHideConnections ? 22 : 240);
     }
 
     private void RevealSidebar(object sender, RoutedEventArgs e)
@@ -439,13 +536,21 @@ public partial class MainWindow : Window
     private void Sidebar_MouseEnter(object sender, MouseEventArgs e) => _sidebarHideTimer.Stop();
     private void Sidebar_MouseLeave(object sender, MouseEventArgs e) => ScheduleSidebarHide();
     private void Sidebar_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) => ScheduleSidebarHide();
+    private void ConnectionsMenu_Closed(object sender, RoutedEventArgs e) => ScheduleSidebarHide();
     private void ScheduleSidebarHide() { if (SidebarPopup.IsOpen) { _sidebarHideTimer.Stop(); _sidebarHideTimer.Start(); } }
     private void HideSidebarAfterDelay(object? sender, EventArgs e)
     {
         _sidebarHideTimer.Stop();
-        if (!Sidebar.IsMouseOver && !SidebarRail.IsMouseOver && !(Sidebar.IsKeyboardFocusWithin && Keyboard.FocusedElement is TextBox) && OwnedWindows.Count == 0)
+        if (!Sidebar.IsMouseOver && !SidebarRail.IsMouseOver && !ConnectionsList.ContextMenu.IsOpen &&
+            !(Sidebar.IsKeyboardFocusWithin && Keyboard.FocusedElement is TextBox) && OwnedWindows.Count == 0)
             SidebarPopup.IsOpen = false;
     }
+    private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (SidebarPopup.IsOpen && !Sidebar.IsMouseOver && !SidebarRail.IsMouseOver && !ConnectionsList.ContextMenu.IsOpen)
+            SidebarPopup.IsOpen = false;
+    }
+    private void Window_Deactivated(object? sender, EventArgs e) => SidebarPopup.IsOpen = false;
     private void SidebarPopup_Closed(object? sender, EventArgs e) => _sidebarHideTimer.Stop();
     private void Workspace_SizeChanged(object sender, SizeChangedEventArgs e) { if (SidebarPopup?.IsOpen == true) Sidebar.Height = Math.Max(200, Workspace.ActualHeight); }
 
@@ -491,9 +596,11 @@ public partial class MainWindow : Window
         else if (e.Key == Key.F && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleFocus(); e.Handled = true; }
     }
 
-    private void ShowError(Exception ex, string title) => MessageBox.Show(this, ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error);
+    private void ShowError(Exception ex, string title) => MessageDialog.ShowMessage(this, ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error);
     private void Window_Closing(object? sender, CancelEventArgs e)
     {
+        SaveOpenSessions();
+        _closing = true;
         SidebarPopup.IsOpen = false;
         _sidebarHideTimer.Stop();
         foreach (var session in SessionSurface.Children.OfType<SessionView>().ToArray()) CloseSession(session);
