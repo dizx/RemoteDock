@@ -48,6 +48,7 @@ public static class RdpFileImporter
             DisplayMode = scaledFit || Get("smart sizing") == "1" ? DisplayMode.ScaledFit
                 : Get("dynamic resolution") == "1" ? DisplayMode.MatchPanel : DisplayMode.ActualSize,
             DesktopWidth = Number("desktopwidth", 1920), DesktopHeight = Number("desktopheight", 1080),
+            RemoteDpiScalePercent = Number("desktopscalefactor", 0),
             Scale = new(1, 2), RedirectClipboard = Number("redirectclipboard", 1) != 0,
             RedirectWindowsKeys = Number("keyboardhook", 0) != 0,
             AdministrativeSession = Get("administrative session") == "1" || Get("connect to console") == "1"

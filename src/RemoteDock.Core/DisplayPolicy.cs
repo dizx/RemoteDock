@@ -5,6 +5,11 @@ public readonly record struct PixelRect(int X, int Y, int Width, int Height);
 
 public static class DisplayPolicy
 {
+    public static int RemoteDesktopScale(ConnectionProfile profile, int localDpi) =>
+        profile.RemoteDpiScalePercent == 0 ? Math.Clamp((int)Math.Round(localDpi * 100.0 / 96), 100, 500) : profile.RemoteDpiScalePercent;
+
+    public static int RemoteDeviceScale(int desktopScale) => desktopScale >= 200 ? 180 : desktopScale >= 125 ? 140 : 100;
+
     public static bool AllowsRemoteResize(ConnectionProfile profile) =>
         profile.DisplayMode is DisplayMode.ScaledFit or DisplayMode.MatchPanel &&
         (profile.Kind == ConnectionKind.Rdp || profile.EnhancedSession);

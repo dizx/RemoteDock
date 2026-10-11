@@ -33,6 +33,7 @@ public sealed record ConnectionDefaults
     public int? Port { get; init; }
     public DisplayMode? DisplayMode { get; init; }
     public ResolutionScale? Scale { get; init; }
+    public int? RemoteDpiScalePercent { get; init; }
     public int? DesktopWidth { get; init; }
     public int? DesktopHeight { get; init; }
     public bool? RedirectClipboard { get; init; }
@@ -45,6 +46,7 @@ public sealed record ConnectionDefaults
         Port = inherit.HasFlag(InheritedSettings.Port) ? Port ?? profile.Port : profile.Port,
         DisplayMode = inherit.HasFlag(InheritedSettings.Display) ? DisplayMode ?? profile.DisplayMode : profile.DisplayMode,
         Scale = inherit.HasFlag(InheritedSettings.Display) ? Scale ?? profile.Scale : profile.Scale,
+        RemoteDpiScalePercent = inherit.HasFlag(InheritedSettings.Display) ? RemoteDpiScalePercent ?? profile.RemoteDpiScalePercent : profile.RemoteDpiScalePercent,
         DesktopWidth = inherit.HasFlag(InheritedSettings.Display) ? DesktopWidth ?? profile.DesktopWidth : profile.DesktopWidth,
         DesktopHeight = inherit.HasFlag(InheritedSettings.Display) ? DesktopHeight ?? profile.DesktopHeight : profile.DesktopHeight,
         RedirectClipboard = inherit.HasFlag(InheritedSettings.Clipboard) ? RedirectClipboard ?? profile.RedirectClipboard : profile.RedirectClipboard,
