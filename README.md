@@ -102,7 +102,12 @@ Choose the fraction under **Scaled Fit resolution** in the connection editor.
 Connection profiles live in `%LOCALAPPDATA%\RemoteDock\connections.json`.
 Username/domain can be saved; passwords are entered at connection time.
 
-For Hyper-V, specify the **host** address, port **2179**, and VM GUID:
+For Hyper-V, specify the **host** address and port **2179**, then click **Load VMs**
+and select the virtual machine by its name and state. RemoteDock stores its GUID
+internally, so renaming the VM does not break the connection. Loading uses your
+Windows identity and requires host WMI access. For manual entry, expand
+**Advanced: virtual machine ID**; find the
+GUID on the host with:
 
 ```powershell
 Get-VM | Select-Object Name, Id
@@ -112,6 +117,16 @@ The account needs VM console access on that host. Basic consoles use the guest's
 display resolution; an enhanced session must be supported by the host and guest
 to provide desktop-style resolution negotiation. There is no silent fallback
 between these modes. Live Hyper-V interoperability still needs endpoint testing.
+
+### Hyper-V sign-in
+
+Hyper-V always uses your signed-in Windows account to access the host. That
+account needs console access, such as Hyper-V Administrators membership. No host
+username, domain or password is entered in Hyper-V connection settings.
+
+After connecting, sign in directly on the VM's Windows login screen. RemoteDock
+does not save or type guest credentials. Regular RDP connections retain their
+normal credential-saving support.
 
 Use the visible controls to leave Focus Mode/full-screen when the remote control
 captures keyboard input. F11 and Ctrl+Shift+F also work when the local WPF UI has focus.

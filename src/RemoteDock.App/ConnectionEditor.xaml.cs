@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using RemoteDock.Core;
@@ -16,6 +18,12 @@ public partial class ConnectionEditor : Window
     private readonly bool _hasSavedPassword;
     private bool _loading = true;
     private Guid? _previousGroup;
+    private CancellationTokenSource? _vmLoadCancellation;
+    private int _vmLoadVersion;
+    private bool _closed;
+    private bool _selectingVm;
+    private string _vmHost = "";
+    private string _selectedVmName = "";
     public ConnectionProfile? Result { get; private set; }
     public ConnectionGroup? GroupResult { get; private set; }
     public bool RememberPassword => RememberPasswordBox.IsChecked == true;
@@ -43,6 +51,7 @@ public partial class ConnectionEditor : Window
         PortBox.Text = profile.Port.ToString();
         VmIdBox.Text = profile.VirtualMachineId?.ToString() ?? "";
         EnhancedBox.IsChecked = profile.EnhancedSession;
+        HostAuthenticationPanel.Visibility = group is null && profile.Kind == ConnectionKind.HyperV ? Visibility.Visible : Visibility.Collapsed;
         AdministrativeBox.IsChecked = profile.AdministrativeSession;
         UserBox.Text = profile.UserName;
         DomainBox.Text = profile.Domain;
@@ -94,9 +103,19 @@ public partial class ConnectionEditor : Window
             if (group.Defaults.RedirectWindowsKeys is null) inherit |= InheritedSettings.WindowsKeys;
         }
         SetInheritance(inherit);
+        _vmHost = profile.Host.Trim();
+        if (profile.VirtualMachineId is { } vmId)
+        {
+            _selectedVmName = profile.VirtualMachineName;
+            var savedVm = new HyperVVirtualMachine(vmId, string.IsNullOrEmpty(profile.VirtualMachineName) ? "Saved VM" : profile.VirtualMachineName, null);
+            VmBox.ItemsSource = new[] { savedVm };
+            VmBox.SelectedItem = savedVm;
+            VmBox.IsEnabled = true;
+        }
         _loading = false;
         UpdateInheritedFields();
         Loaded += (_, _) => NameBox.Focus();
+        Closed += (_, _) => { _closed = true; CancelVmLoad(); };
     }
 
     private Guid? SelectedGroup => (GroupBox.SelectedItem as GroupChoice)?.Id;
@@ -133,6 +152,11 @@ public partial class ConnectionEditor : Window
     private void UpdateInheritedFields()
     {
         if (_loading) return;
+        bool hyperV = _group is null && KindBox.SelectedIndex == 1;
+        UserNameLabel.Text = hyperV ? "Hyper-V host user name (not the VM login)" : "User name (optional)";
+        DomainLabel.Text = hyperV ? "Hyper-V host domain (optional)" : "Domain (optional)";
+        RememberPasswordBox.Content = hyperV ? "Save Hyper-V host password in Windows Credential Manager" : "Save password in Windows Credential Manager";
+        HostCredentialFields.Visibility = hyperV ? Visibility.Collapsed : Visibility.Visible;
         bool canInherit = _group is not null || SelectedGroup is not null;
         InheritUserBox.IsEnabled = InheritDomainBox.IsEnabled = InheritPasswordBox.IsEnabled = InheritPortBox.IsEnabled =
             InheritDisplayBox.IsEnabled = InheritClipboardBox.IsEnabled = InheritKeysBox.IsEnabled = canInherit;
@@ -153,6 +177,13 @@ public partial class ConnectionEditor : Window
         if (!DisplayFields.IsEnabled) SetDisplayFields(defaults);
         if (!ClipboardBox.IsEnabled) ClipboardBox.IsChecked = defaults.RedirectClipboard;
         if (!KeysBox.IsEnabled) KeysBox.IsChecked = defaults.RedirectWindowsKeys;
+        if (hyperV)
+        {
+            InheritUserBox.IsEnabled = InheritDomainBox.IsEnabled = InheritPasswordBox.IsEnabled = false;
+            UserBox.IsEnabled = DomainBox.IsEnabled = false;
+            RememberPasswordBox.IsEnabled = false;
+        }
+        else RememberPasswordBox.IsEnabled = true;
     }
 
     private void SetDisplayFields(ConnectionProfile profile)
@@ -181,6 +212,13 @@ public partial class ConnectionEditor : Window
         if (VmPanel is null || PortBox is null || _group is not null) return;
         bool hyperV = KindBox.SelectedIndex == 1;
         VmPanel.Visibility = hyperV ? Visibility.Visible : Visibility.Collapsed;
+        if (HostAuthenticationPanel is not null)
+            HostAuthenticationPanel.Visibility = hyperV ? Visibility.Visible : Visibility.Collapsed;
+        if (!_loading)
+        {
+            CancelVmLoad();
+            UpdateInheritedFields();
+        }
         if (string.IsNullOrEmpty(PortBox.Text) || PortBox.Text is "3389" or "2179") PortBox.Text = hyperV ? "2179" : "3389";
     }
 
@@ -191,6 +229,96 @@ public partial class ConnectionEditor : Window
         return value;
     }
 
+    private void CancelVmLoad()
+    {
+        _vmLoadVersion++;
+        _vmLoadCancellation?.Cancel();
+        _vmLoadCancellation = null;
+        LoadVmsButton.IsEnabled = true;
+    }
+
+    private void Host_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_loading || string.Equals(_vmHost, HostBox.Text.Trim(), StringComparison.OrdinalIgnoreCase)) return;
+        _vmHost = HostBox.Text.Trim();
+        CancelVmLoad();
+        VmBox.ItemsSource = null;
+        VmBox.IsEnabled = false;
+        VmIdBox.Text = "";
+        _selectedVmName = "";
+        VmLoadStatus.Text = "Load VMs from this host, then select one by name.";
+    }
+
+    private void Vm_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || VmBox.SelectedItem is not HyperVVirtualMachine vm) return;
+        _selectingVm = true;
+        try
+        {
+            _selectedVmName = vm.Name;
+            VmIdBox.Text = vm.Id.ToString("D");
+            if (string.IsNullOrWhiteSpace(NameBox.Text) || NameBox.Text == "New connection") NameBox.Text = vm.Name;
+        }
+        finally { _selectingVm = false; }
+    }
+
+    private void VmId_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_loading || _selectingVm) return;
+        _selectedVmName = "";
+        VmBox.SelectedItem = null;
+        if (Guid.TryParse(VmIdBox.Text, out var id))
+            VmBox.SelectedItem = VmBox.Items.OfType<HyperVVirtualMachine>().FirstOrDefault(vm => vm.Id == id);
+    }
+
+    private async void LoadVms_Click(object sender, RoutedEventArgs e) => await LoadVirtualMachinesAsync();
+
+    internal async Task LoadVirtualMachinesAsync(Func<ConnectionProfile, CancellationToken, Task<HyperVVirtualMachine[]>>? loader = null)
+    {
+        if (_closed || _group is not null || KindBox.SelectedIndex != 1) return;
+        string host = HostBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(host) || host.Any(char.IsWhiteSpace) || host.IndexOfAny(['\\', '/']) >= 0)
+        {
+            VmLoadStatus.Text = "Enter a Hyper-V host name or IP address first.";
+            return;
+        }
+        CancelVmLoad();
+        int version = _vmLoadVersion;
+        using var cancellation = new CancellationTokenSource();
+        _vmLoadCancellation = cancellation;
+        LoadVmsButton.IsEnabled = false;
+        VmLoadStatus.Text = $"Loading VMs from {host}…";
+        try
+        {
+            var profile = _original with { Host = host, Kind = ConnectionKind.HyperV };
+            var machines = await (loader ?? HyperVVirtualMachines.LoadAsync)(profile, cancellation.Token);
+            if (_closed || version != _vmLoadVersion) return;
+            Guid.TryParse(VmIdBox.Text, out var savedId);
+            VmBox.ItemsSource = machines;
+            VmBox.SelectedItem = machines.FirstOrDefault(vm => vm.Id == savedId);
+            VmBox.IsEnabled = machines.Length > 0;
+            VmLoadStatus.Text = machines.Length == 0 ? "No VMs are visible. Check the host and your Hyper-V permissions, or enter the ID manually."
+                : savedId != Guid.Empty && VmBox.SelectedItem is null ? "The saved VM was not found on this host. Select a VM or check the manual ID."
+                : $"{machines.Length} VM(s) loaded. Select a VM by name.";
+            if (savedId != Guid.Empty && VmBox.SelectedItem is null) VmIdDetails.IsExpanded = true;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            if (_closed || version != _vmLoadVersion) return;
+            VmLoadStatus.Text = $"Could not load VMs (0x{ex.HResult:X8}). Check Hyper-V host credentials and permissions; for a local host, try Run as administrator. Remote hosts also need WMI/DCOM access. You can still enter the ID manually.";
+            VmIdDetails.IsExpanded = true;
+        }
+        finally
+        {
+            if (version == _vmLoadVersion)
+            {
+                _vmLoadCancellation = null;
+                LoadVmsButton.IsEnabled = true;
+            }
+        }
+    }
+
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -199,7 +327,7 @@ public partial class ConnectionEditor : Window
                 throw new ArgumentException("Port and resolution must be whole numbers.");
             if (ScaleBox.SelectedItem is not ResolutionScale scale) throw new ArgumentException("Select a resolution scale.");
             if (DpiBox.SelectedItem is not DpiChoice dpi) throw new ArgumentException("Select a remote DPI scale.");
-            if (RememberPassword && !_hasSavedPassword && PasswordInput.Password.Length == 0)
+            if (HostCredentialFields.Visibility == Visibility.Visible && RememberPassword && !_hasSavedPassword && PasswordInput.Password.Length == 0)
                 throw new ArgumentException("Enter a password to save, or uncheck the saved-password option.");
             if (_group is not null)
             {
@@ -229,17 +357,18 @@ public partial class ConnectionEditor : Window
                 Guid? vmId = null;
                 if (KindBox.SelectedIndex == 1)
                 {
-                    if (!Guid.TryParse(VmIdBox.Text, out var parsed)) throw new ArgumentException("Enter a valid virtual machine ID (GUID).");
+                    if (!Guid.TryParse(VmIdBox.Text, out var parsed)) throw new ArgumentException("Select a virtual machine, or enter a valid ID under Advanced.");
                     vmId = parsed;
                 }
                 var result = _original with
                 {
                     Name = NameBox.Text.Trim(), Host = HostBox.Text.Trim(), Port = port,
-                    GroupId = SelectedGroup, Inherit = Inheritance,
+                    GroupId = SelectedGroup, Inherit = vmId is null ? Inheritance : Inheritance & ~InheritedSettings.SignIn,
                     Kind = (ConnectionKind)KindBox.SelectedIndex, VirtualMachineId = vmId,
+                    VirtualMachineName = vmId is null ? "" : _selectedVmName,
                     EnhancedSession = EnhancedBox.IsChecked == true,
                     AdministrativeSession = AdministrativeBox.IsChecked == true,
-                    UserName = UserBox.Text.Trim(), Domain = DomainBox.Text.Trim(),
+                    UserName = vmId is null ? UserBox.Text.Trim() : "", Domain = vmId is null ? DomainBox.Text.Trim() : "",
                     DisplayMode = (DisplayMode)DisplayBox.SelectedIndex, Scale = scale,
                     RemoteDpiScalePercent = dpi.Percent,
                     DesktopWidth = width, DesktopHeight = height,

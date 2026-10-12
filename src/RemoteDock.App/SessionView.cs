@@ -101,8 +101,8 @@ public sealed class SessionView : UserControl, IDisposable
             _lastRequestedSize = _desktop;
             _lastRequestedDpiScale = DisplayPolicy.RemoteDesktopScale(Profile, _panel.DeviceDpi);
             _client.Server = Profile.Host;
-            _client.UserName = Profile.UserName;
-            _client.Domain = Profile.Domain;
+            _client.UserName = Profile.UsesWindowsHostAuthentication ? "" : Profile.UserName;
+            _client.Domain = Profile.UsesWindowsHostAuthentication ? "" : Profile.Domain;
             _client.DesktopWidth = _desktop.Width;
             _client.DesktopHeight = _desktop.Height;
             _client.ColorDepth = 32;
@@ -128,7 +128,7 @@ public sealed class SessionView : UserControl, IDisposable
             _client.AdvancedSettings3.MaxReconnectAttempts = 5;
             _client.SecuredSettings2.KeyboardHookMode = Profile.RedirectWindowsKeys ? 1 : 0;
             _client.SecuredSettings2.AudioRedirectionMode = 2;
-            if (_password.Length > 0)
+            if (!Profile.UsesWindowsHostAuthentication && _password.Length > 0)
             {
                 var secret = Marshal.SecureStringToBSTR(_password);
                 try { _client.AdvancedSettings2.ClearTextPassword = Marshal.PtrToStringBSTR(secret); }
@@ -137,11 +137,8 @@ public sealed class SessionView : UserControl, IDisposable
 
             if (Profile.Kind == ConnectionKind.HyperV)
             {
-                if (string.IsNullOrWhiteSpace(Profile.UserName))
-                {
-                    object disableDelegation = true;
-                    ((MSTSCLib.IMsRdpExtendedSettings)_client.GetOcx()!).set_Property("DisableCredentialsDelegation", ref disableDelegation);
-                }
+                object disableDelegation = true;
+                extended.set_Property("DisableCredentialsDelegation", ref disableDelegation);
                 _client.AdvancedSettings7.AuthenticationServiceClass = "Microsoft Virtual Console Service";
                 _client.AdvancedSettings8.NegotiateSecurityLayer = false;
                 _client.AdvancedSettings7.PCB = Profile.VirtualMachineId!.Value.ToString("D") +

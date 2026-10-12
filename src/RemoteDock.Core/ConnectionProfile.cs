@@ -18,7 +18,10 @@ public sealed record ConnectionProfile
     public string UserName { get; init; } = "";
     public string Domain { get; init; } = "";
     public Guid? VirtualMachineId { get; init; }
+    public string VirtualMachineName { get; init; } = "";
     public bool EnhancedSession { get; init; }
+    [JsonIgnore]
+    public bool UsesWindowsHostAuthentication => Kind == ConnectionKind.HyperV;
     public bool AdministrativeSession { get; init; }
     public DisplayMode DisplayMode { get; init; } = DisplayMode.ScaledFit;
     // Zero follows the local monitor's Windows scaling.

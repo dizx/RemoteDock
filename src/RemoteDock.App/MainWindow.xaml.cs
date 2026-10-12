@@ -194,7 +194,8 @@ public partial class MainWindow : Window
             var editor = new ConnectionEditor(existing, _catalog, SelectedGroupId, hasPassword) { Owner = this };
             if (editor.ShowDialog() != true || editor.Result is not { } profile) return;
             var updated = _catalog with { Connections = _catalog.Connections.Where(p => p.Id != profile.Id).Append(profile).ToArray() };
-            if (!SaveCatalog(updated, CredentialStore.ConnectionTarget(profile.Id), editor.RememberPassword, editor.TakePassword(), _catalog.Resolve(profile).UserName)) return;
+            if (!SaveCatalog(updated, CredentialStore.ConnectionTarget(profile.Id), profile.Kind != ConnectionKind.HyperV && editor.RememberPassword,
+                editor.TakePassword(), _catalog.Resolve(profile).UserName)) return;
             RefreshConnections(profile.Id);
             StatusText.Text = "Connection saved. Reconnect to apply updated settings.";
         }
@@ -271,24 +272,22 @@ public partial class MainWindow : Window
 
     private bool SaveCatalog(ConnectionCatalog catalog, string? target = null, bool? remember = null, string? password = null, string userName = "")
     {
-        SavedCredential? previous = null;
-        bool credentialChanged = false;
+        var previous = new Dictionary<string, SavedCredential?>();
         try
         {
             if (!_storeReadable) throw new IOException("Repair the existing connection file before saving changes.");
             catalog.Validate();
             if (target is not null && remember.HasValue)
             {
-                previous = CredentialStore.Read(target);
                 if (!remember.Value)
                 {
+                    previous[target] = CredentialStore.Read(target);
                     CredentialStore.Delete(target);
-                    credentialChanged = previous is not null;
                 }
                 else if (!string.IsNullOrEmpty(password))
                 {
+                    previous[target] = CredentialStore.Read(target);
                     CredentialStore.Write(target, userName, password);
-                    credentialChanged = true;
                 }
             }
             _store.SaveCatalog(catalog);
@@ -297,12 +296,12 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            if (credentialChanged && target is not null)
+            foreach (var entry in previous.Reverse())
             {
                 try
                 {
-                    if (previous is null) CredentialStore.Delete(target);
-                    else CredentialStore.Write(target, previous.UserName, previous.Password);
+                    if (entry.Value is null) CredentialStore.Delete(entry.Key);
+                    else CredentialStore.Write(entry.Key, entry.Value.UserName, entry.Value.Password);
                 }
                 catch (Exception rollback) { ex = new AggregateException("Saving failed and the previous credential could not be restored.", ex, rollback); }
             }
@@ -332,7 +331,12 @@ public partial class MainWindow : Window
     }
 
     private void Connect_Click(object sender, RoutedEventArgs e) { if (SelectedEntry is ConnectionProfile profile) Connect(profile); }
-    private void ConnectAs_Click(object sender, RoutedEventArgs e) { if (SelectedEntry is ConnectionProfile profile) Connect(profile, prompt: true); }
+    private void ConnectAs_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedEntry is not ConnectionProfile profile) return;
+        if (profile.Kind == ConnectionKind.HyperV) EditConnection(profile);
+        else Connect(profile, prompt: true);
+    }
 
     private static TreeViewItem? ItemUnderPointer(DependencyObject? element)
     {
@@ -359,6 +363,7 @@ public partial class MainWindow : Window
 
     private SavedCredential? FindCredential(ConnectionProfile profile)
     {
+        if (profile.UsesWindowsHostAuthentication) return null;
         var credential = CredentialStore.Read(CredentialStore.ConnectionTarget(profile.Id));
         if (credential is not null || !profile.Inherit.HasFlag(InheritedSettings.Password)) return credential;
         foreach (var group in _catalog.GroupChain(profile.GroupId).Reverse())
@@ -377,13 +382,14 @@ public partial class MainWindow : Window
             var effective = _catalog.Resolve(profile);
             var saved = FindCredential(profile);
             string password = saved?.Password ?? "";
-            if (prompt || (saved is null && !string.IsNullOrWhiteSpace(effective.UserName)))
+            if (!effective.UsesWindowsHostAuthentication && (prompt || (saved is null && !string.IsNullOrWhiteSpace(effective.UserName))))
             {
                 var credentials = new CredentialsDialog(effective) { Owner = this };
                 if (credentials.ShowDialog() != true) return;
                 password = credentials.TakePassword();
                 bool identityChanged = credentials.UserName != effective.UserName || credentials.Domain != effective.Domain;
-                var updatedProfile = identityChanged ? profile with { UserName = credentials.UserName, Domain = credentials.Domain, Inherit = profile.Inherit & ~InheritedSettings.SignIn } : profile;
+                var updatedProfile = identityChanged ? profile with { UserName = credentials.UserName, Domain = credentials.Domain,
+                    Inherit = profile.Inherit & ~InheritedSettings.SignIn } : profile;
                 if (identityChanged || credentials.RememberPassword)
                 {
                     var updated = _catalog with { Connections = _catalog.Connections.Select(p => p.Id == profile.Id ? updatedProfile : p).ToArray() };

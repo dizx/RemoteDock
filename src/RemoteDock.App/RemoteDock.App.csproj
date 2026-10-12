@@ -10,6 +10,7 @@
     <ApplicationIcon>Assets\RemoteDock.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="System.Management" Version="10.0.0" />
     <Resource Include="Assets\RemoteDock.ico" />
     <ProjectReference Include="..\RemoteDock.Core\RemoteDock.Core.csproj" />
     <Reference Include="MSTSCLib">

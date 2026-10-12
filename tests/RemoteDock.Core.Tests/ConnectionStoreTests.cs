@@ -20,7 +20,7 @@ public sealed class ConnectionStoreTests : IDisposable
         var profile = new ConnectionProfile
         {
             Name = "Build VM", Host = "hyperv.example", Kind = ConnectionKind.HyperV,
-            Port = 2179, VirtualMachineId = Guid.NewGuid(), EnhancedSession = true,
+            Port = 2179, VirtualMachineId = Guid.NewGuid(), VirtualMachineName = "Build VM", EnhancedSession = true,
             DesktopWidth = 1600, DesktopHeight = 900, ResolutionScalePercent = 75, UserName = "operator"
         };
         var store = new ConnectionStore(StorePath);
@@ -67,6 +67,14 @@ public sealed class ConnectionStoreTests : IDisposable
         Assert.Throws<ArgumentException>(profile.Validate);
         Assert.Throws<ArgumentException>((profile with { VirtualMachineId = Guid.Empty }).Validate);
         (profile with { VirtualMachineId = Guid.NewGuid() }).Validate();
+    }
+
+    [Fact]
+    public void HyperVAlwaysUsesWindowsIdentityEvenForLegacyExplicitCredentials()
+    {
+        var legacy = JsonSerializer.Deserialize<ConnectionProfile>("{\"UserName\":\"host-admin\",\"HyperVUseWindowsAuthentication\":false}")!;
+        Assert.True((legacy with { Kind = ConnectionKind.HyperV }).UsesWindowsHostAuthentication);
+        Assert.False((legacy with { Kind = ConnectionKind.Rdp }).UsesWindowsHostAuthentication);
     }
 
     [Theory]

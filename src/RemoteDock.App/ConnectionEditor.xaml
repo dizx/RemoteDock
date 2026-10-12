@@ -26,32 +26,51 @@
             <ComboBoxItem Content="Hyper-V console" />
           </ComboBox>
           <TextBlock Text="Host name / IP (Hyper-V: the host, not the guest)" />
-          <TextBox x:Name="HostBox" />
+          <TextBox x:Name="HostBox" TextChanged="Host_Changed" />
           <CheckBox x:Name="AdministrativeBox" Content="Administrative RDP session" />
         </StackPanel>
         <CheckBox x:Name="InheritPortBox" Content="Use group port" Click="Inheritance_Changed" />
         <TextBlock Text="Port" />
         <TextBox x:Name="PortBox" />
         <StackPanel x:Name="VmPanel">
-          <TextBlock Text="Virtual machine ID (GUID)" />
-          <TextBox x:Name="VmIdBox" />
-          <TextBlock Text="Find it on the host: Get-VM | Select Name, Id" Foreground="#A9BBCD" />
+          <TextBlock Text="Virtual machine" />
+          <DockPanel LastChildFill="True">
+            <Button x:Name="LoadVmsButton" Content="Load VMs" DockPanel.Dock="Right" Click="LoadVms_Click" Margin="8,3,0,8" />
+            <ComboBox x:Name="VmBox" DisplayMemberPath="Label" SelectionChanged="Vm_Changed"
+                      AutomationProperties.Name="Virtual machine" IsEnabled="False" />
+          </DockPanel>
+          <TextBlock x:Name="VmLoadStatus" Text="Load VMs from the host above, then select one by name."
+                     TextWrapping="Wrap" Foreground="#A9BBCD" Margin="0,0,0,8" />
+          <Expander x:Name="VmIdDetails" Header="Advanced: virtual machine ID (manual entry)" Margin="0,0,0,8">
+            <StackPanel>
+              <TextBox x:Name="VmIdBox" TextChanged="VmId_Changed" AutomationProperties.Name="Virtual machine ID" />
+              <TextBlock Text="Filled automatically when you select a VM. Manual lookup: Get-VM | Select Name, Id"
+                         TextWrapping="Wrap" Foreground="#A9BBCD" />
+            </StackPanel>
+          </Expander>
           <CheckBox x:Name="EnhancedBox" Content="Request enhanced session" />
           <TextBlock Text="Basic console resolution is controlled by the guest. Enhanced sessions require host and guest support."
                      TextWrapping="Wrap" Foreground="#A9BBCD" Margin="0,4,0,12" />
         </StackPanel>
+        <StackPanel x:Name="HostAuthenticationPanel" Visibility="Collapsed">
+          <TextBlock Text="Hyper-V host authentication" FontWeight="SemiBold" Margin="0,4,0,4" />
+          <TextBlock Text="Uses your signed-in Windows account. Sign in inside the VM after connecting."
+                     TextWrapping="Wrap" Foreground="#A9BBCD" Margin="0,0,0,12" />
+        </StackPanel>
+        <StackPanel x:Name="HostCredentialFields">
         <CheckBox x:Name="InheritUserBox" Content="Use group user name" Click="Inheritance_Changed" />
         <StackPanel x:Name="SignInFields">
-          <TextBlock Text="User name (optional)" />
+          <TextBlock x:Name="UserNameLabel" Text="User name (optional)" />
           <TextBox x:Name="UserBox" />
           <CheckBox x:Name="InheritDomainBox" Content="Use group domain" Click="Inheritance_Changed" />
-          <TextBlock Text="Domain (optional)" />
+          <TextBlock x:Name="DomainLabel" Text="Domain (optional)" />
           <TextBox x:Name="DomainBox" />
         </StackPanel>
         <CheckBox x:Name="InheritPasswordBox" Content="Use group password if none is saved here" Click="Inheritance_Changed" />
         <CheckBox x:Name="RememberPasswordBox" Content="Save password in Windows Credential Manager" />
         <PasswordBox x:Name="PasswordInput" IsEnabled="{Binding IsChecked, ElementName=RememberPasswordBox}" AutomationProperties.Name="Saved password" />
         <TextBlock x:Name="PasswordHint" TextWrapping="Wrap" Foreground="#A9BBCD" Margin="0,0,0,12" />
+        </StackPanel>
         <CheckBox x:Name="InheritDisplayBox" Content="Use group display settings" Click="Inheritance_Changed" />
         <StackPanel x:Name="DisplayFields">
         <TextBlock Text="Display mode" />

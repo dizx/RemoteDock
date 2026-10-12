@@ -19,7 +19,7 @@ namespace RemoteDock.SmokeTests;
 internal static class Program
 {
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
     {
         var app = new RemoteDock.App.App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         string sandbox = Path.Combine(Path.GetTempPath(), "opencode", "RemoteDock.Smoke", Guid.NewGuid().ToString("N"));
@@ -43,6 +43,13 @@ internal static class Program
                 await Task.Yield();
                 window = (MainWindow)app.MainWindow;
                 await Task.Delay(150);
+                if (args.Contains("--hyperv-only"))
+                {
+                    await HyperVPickerChecks.Run();
+                    window.Close();
+                    app.Shutdown(0);
+                    return;
+                }
                 var image = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
                 image.Render(window);
                 var encoder = new PngBitmapEncoder();
@@ -336,6 +343,7 @@ internal static class Program
                 Require(sessionStore.Load().Length == 0, "Explicitly closing a tab did not remove it from recovery state.");
                 window.AddSession(savedProfile, "", connect: false);
 
+                await HyperVPickerChecks.Run();
                 window.Close();
                 Require(client.IsDisposed && actualClient.IsDisposed, "Closing the window left native controls alive.");
                 Require(sessionStore.Load().SequenceEqual(new[] { savedProfile.Id }), "Application shutdown erased the tabs to restore.");
