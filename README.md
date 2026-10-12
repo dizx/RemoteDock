@@ -1,8 +1,63 @@
 # RemoteDock
 
-A Windows remote desktop connection manager built with C#, .NET 10, and WPF.
+**Less window juggling. More room to work.**
 
-## A better fit for older applications
+RemoteDock brings your remote desktops and Hyper-V VMs together in one friendly
+Windows app. Find a connection, resume a VM, and settle into a focused workspace
+that remembers how you like to work.
+
+## Your workspace, made simpler
+
+### Know your VM's state. Take control.
+
+Pick a Hyper-V VM by name and see whether it's running, off, paused, or saved.
+RemoteDock offers to **Start** or **Resume** it before connecting, and to **Save
+state** when you're done—ready to resume its work later.
+
+- Right-click a connection or tab to check **VM state**, start/resume, or save.
+- Follow save and resume progress with clear, readable status messages.
+- Choose whether to save the VM or leave it running when you disconnect.
+- Get an elevation prompt when local management needs administrator access,
+  with your open and pending restore tabs carried through the restart.
+
+### Find your focus
+
+Turn on **Focus Mode** to give your remote desktop the space it deserves.
+Navigation, tabs, and normal toolbars step aside, while a slim session switcher
+keeps your other connections and the way back within reach.
+
+Go full screen for even more room, or let the connection sidebar tuck itself
+away until you need it. Opening a connection that's already open takes you
+straight to its existing tab.
+
+### Pick up where you left off
+
+RemoteDock remembers your open tabs and offers to reopen those connections the
+next time you start it—even after an unexpected shutdown. Your window size,
+position, and maximized state are remembered too.
+
+Start with your previous workspace or choose a fresh session. Connections you
+explicitly close stay closed, and an administrator restart keeps the remaining
+restore list intact.
+
+### Make everyday connections easier
+
+- **Find it fast:** search saved connections or sort by name or most recently used.
+- **Organize once:** group connections and share settings through inheritance.
+- **Bring your setup:** import mRemoteNG XML and `.rdp` files.
+- **Sign in your way:** optionally remember RDP passwords in Windows Credential
+  Manager, or enter them when connecting. Sign in to Hyper-V guests in the console.
+- **Keep work flowing:** clipboard sharing and optional remote Windows-key routing.
+
+## Get connected
+
+1. Run **`RemoteDock-1.0.13-win-x64-Setup.exe`** and choose an all-users or
+   current-user installation. The installer includes the .NET runtime.
+2. Add an **RDP** or **Hyper-V** connection, or import your existing connections.
+3. For Hyper-V, enter the host, click **Load VMs**, and select a VM by name.
+4. Select **Connect**. Try **Focus Mode** once you're ready to work.
+
+## A comfortable fit—even for older applications
 
 RemoteDock is especially useful for older applications that struggle with Windows
 DPI scaling: tiny text, clipped controls, or broken layouts on high-resolution
@@ -14,27 +69,21 @@ For example, on a 4K panel, **1/2 resolution** requests a 1920 × 1080 remote
 desktop and scales it up to fill the panel. This makes older interfaces easier
 to read without relying on the application's own high-DPI support.
 
-## Features
+Choose the display mode that suits your work:
 
-- Saved RDP and Hyper-V console connections, search, and independent session tabs.
-- Connection groups with inherited settings, mRemoteNG XML / `.rdp` import,
-  and alphabetical or last-connected sorting.
-- Hyper-V VM discovery and state display, Start/Resume and Save state actions,
-  provider-reported progress, and on-demand local administrator elevation.
-- Black session-status screens with large green text and stable progress updates.
-- **Scaled Fit**: request a fraction of the panel's physical pixel dimensions
-  (1/2 by default), then scale locally to fill it. Presets: **1/4, 1/3, 1/2, 2/3,
-  3/4, 1/1**. A 3840 × 2160 panel requests 1920 × 1080 at 1/2 or 2560 × 1440 at
-  2/3. Resizing the panel updates the remote resolution after a 300 ms pause.
-- **Actual Size** with scrolling, or **Match Panel** with dynamic remote resizing.
-- **Focus Mode** hides navigation, tabs, and normal toolbars. A slim local strip
-  provides session switching and an always-visible way back.
-- Full-screen window, clipboard sharing, and optional remote Windows-key routing.
-- Window size, position, maximized state, and optional reopening of previous tabs.
-- Optional RDP password storage in Windows Credential Manager; passwords are not
-  written to connection profiles. Hyper-V guest sign-in stays inside the console.
+| Mode | Best for |
+| --- | --- |
+| **Scaled Fit** | A lower-resolution remote desktop, enlarged locally for comfortable reading. |
+| **Match Panel** | A remote desktop that adjusts its resolution to your available space. |
+| **Actual Size** | An unscaled view with scrolling when you need it. |
+
+Scaled Fit offers **1/4, 1/3, 1/2, 2/3, 3/4, and 1/1** resolution presets,
+with **1/2** as the default. Remote resizing depends on the connection type;
+basic Hyper-V consoles use the guest's display resolution.
 
 ## Build and run
+
+RemoteDock is built with **C#, .NET 10, and WPF**, using the Windows RDP ActiveX control.
 
 Requirements: Windows x64, .NET SDK 10.0.401 (or a later 10.0.4xx patch), and the
 .NET Framework 4.8 SDK tools available through Visual Studio Installer.
