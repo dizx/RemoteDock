@@ -303,6 +303,16 @@ public partial class ConnectionEditor : Window
             if (savedId != Guid.Empty && VmBox.SelectedItem is null) VmIdDetails.IsExpanded = true;
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex) when (HyperVHost.ShouldOfferElevation(_original with { Host = host, Kind = ConnectionKind.HyperV }, ex))
+        {
+            if (_closed || version != _vmLoadVersion) return;
+            VmLoadStatus.Text = "Administrator access is needed to load local Hyper-V virtual machines.";
+            if (Owner is MainWindow main)
+            {
+                try { main.RequestElevation(CaptureHyperVDraft(), ElevationAction.LoadVirtualMachines, this); }
+                catch (ArgumentException error) { VmLoadStatus.Text = error.Message; }
+            }
+        }
         catch (Exception ex)
         {
             if (_closed || version != _vmLoadVersion) return;
@@ -317,6 +327,27 @@ public partial class ConnectionEditor : Window
                 LoadVmsButton.IsEnabled = true;
             }
         }
+    }
+
+    internal ConnectionProfile CaptureHyperVDraft()
+    {
+        if (!int.TryParse(PortBox.Text, out int port) || !int.TryParse(WidthBox.Text, out int width) || !int.TryParse(HeightBox.Text, out int height))
+            throw new ArgumentException("Enter whole numbers for port and resolution before restarting.");
+        if (ScaleBox.SelectedItem is not ResolutionScale scale || DpiBox.SelectedItem is not DpiChoice dpi)
+            throw new ArgumentException("Select display settings before restarting.");
+        Guid? vmId = Guid.TryParse(VmIdBox.Text, out var id) ? id : null;
+        if (!string.IsNullOrWhiteSpace(VmIdBox.Text) && vmId is null)
+            throw new ArgumentException("Clear or correct the VM ID before restarting.");
+        return _original with
+        {
+            Name = NameBox.Text.Trim(), Host = HostBox.Text.Trim(), Port = port, Kind = ConnectionKind.HyperV,
+            GroupId = SelectedGroup, Inherit = Inheritance & ~InheritedSettings.SignIn,
+            VirtualMachineId = vmId, VirtualMachineName = _selectedVmName,
+            EnhancedSession = EnhancedBox.IsChecked == true, AdministrativeSession = AdministrativeBox.IsChecked == true,
+            UserName = "", Domain = "", DisplayMode = (DisplayMode)DisplayBox.SelectedIndex, Scale = scale,
+            RemoteDpiScalePercent = dpi.Percent, DesktopWidth = width, DesktopHeight = height,
+            RedirectClipboard = ClipboardBox.IsChecked == true, RedirectWindowsKeys = KeysBox.IsChecked == true
+        };
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)

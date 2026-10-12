@@ -209,7 +209,7 @@
                  ScrollViewer.VerticalScrollBarVisibility="Disabled" AutomationProperties.Name="Session tabs">
           <ListBox.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ListBox.ItemsPanel>
         </ListBox>
-        <Grid x:Name="SessionSurface" Grid.Row="1" Background="#0B1018" ClipToBounds="True">
+        <Grid x:Name="SessionSurface" Grid.Row="1" Background="Black" ClipToBounds="True">
           <StackPanel x:Name="Welcome" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="440" Margin="32">
             <TextBlock Text="Room for the remote." FontSize="32" FontWeight="SemiBold" />
             <TextBlock x:Name="WelcomeDescription" Text="Connect to a Windows desktop or Hyper-V console. Fit your workspace with fewer remote pixels and more room to work."
@@ -223,7 +223,8 @@
     <Popup x:Name="SidebarPopup" Placement="Right" PlacementTarget="{Binding ElementName=SidebarRail}"
            AllowsTransparency="True" StaysOpen="True" PopupAnimation="None" Closed="SidebarPopup_Closed" />
     <Border x:Name="StatusBar" Grid.Row="3" Background="{StaticResource Surface}" Padding="10,2">
-      <TextBlock x:Name="StatusText" Text="Ready" FontSize="11" Foreground="#A9BBCD" TextTrimming="CharacterEllipsis" />
+      <TextBlock x:Name="StatusText" Text="Ready" FontSize="11" Foreground="#A9BBCD" TextTrimming="CharacterEllipsis"
+                 TextWrapping="NoWrap" MaxHeight="18" />
     </Border>
   </Grid>
 </Window>

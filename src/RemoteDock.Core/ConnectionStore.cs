@@ -6,6 +6,7 @@ namespace RemoteDock.Core;
 
 public sealed class ConnectionStore(string path)
 {
+    public string DirectoryPath => Path.GetDirectoryName(Path.GetFullPath(path))!;
     private bool _loaded;
     private string? _snapshot;
     private static readonly JsonSerializerOptions Options = new()

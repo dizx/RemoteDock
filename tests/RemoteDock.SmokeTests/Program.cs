@@ -43,9 +43,36 @@ internal static class Program
                 await Task.Yield();
                 window = (MainWindow)app.MainWindow;
                 await Task.Delay(150);
+                if (args.Length == 3 && args[0] == "--live-hyperv")
+                {
+                    await LiveHyperVChecks.Run(window, Guid.Parse(args[1]), Path.GetFullPath(args[2]));
+                    window.Close();
+                    app.Shutdown(0);
+                    return;
+                }
+                if (args.Contains("--elevation-only"))
+                {
+                    await ElevationChecks.Run();
+                    window.Close();
+                    app.Shutdown(0);
+                    return;
+                }
+                if (args.Contains("--session-status-only"))
+                {
+                    var statusSession = window.AddSession(new() { Name = "Offline status probe", Host = "offline.invalid" }, "", connect: false);
+                    await Task.Delay(250);
+                    await SessionStatusChecks.Run(statusSession);
+                    await SessionStatusChecks.CheckProgress();
+                    await SessionConnectionChecks.Run(window);
+                    window.Close();
+                    app.Shutdown(0);
+                    return;
+                }
                 if (args.Contains("--hyperv-only"))
                 {
                     await HyperVPickerChecks.Run();
+                    await HyperVLifecycleChecks.Run();
+                    await SessionStatusChecks.CheckProgress();
                     window.Close();
                     app.Shutdown(0);
                     return;
@@ -146,8 +173,10 @@ internal static class Program
                 await Task.Delay(500);
                 Require(session.Status == "RDP control initialized (offline)", session.Status);
 
+                await SessionStatusChecks.Run(session);
+
                 var host = (WindowsFormsHost)session.Content;
-                var client = host.Child.Controls[0];
+                var client = host.Child.Controls.OfType<System.Windows.Forms.AxHost>().Single();
                 int DesktopWidth() => (int)client.GetType().GetProperty("DesktopWidth")!.GetValue(client)!;
                 int DesktopHeight() => (int)client.GetType().GetProperty("DesktopHeight")!.GetValue(client)!;
                 var initialDesktop = new PixelSize(DesktopWidth(), DesktopHeight());
@@ -163,11 +192,12 @@ internal static class Program
                 await Task.Delay(400);
                 Require(!app.Windows.OfType<CredentialsDialog>().Any(), "Reconnect opened a credential dialog.");
                 Require(((ListBox)window.FindName("Tabs")).Items.Count == 1, "Reconnect replaced or duplicated the session tab.");
-                client = host.Child.Controls[0];
+                client = host.Child.Controls.OfType<System.Windows.Forms.AxHost>().Single();
                 Require(previousClient.IsDisposed && !ReferenceEquals(previousClient, client), "Reconnect did not recreate the native connection.");
                 Require(session.Status == "RDP control initialized (offline)", session.Status);
 
                 var autoHide = (CheckBox)window.FindName("AutoHideBox");
+                session.ShowRemoteDisplay();
                 autoHide.IsChecked = true;
                 autoHide.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 await Task.Delay(150);
@@ -203,7 +233,7 @@ internal static class Program
                 Require(tabs.Items.Count == 2 && ReferenceEquals(((ListBoxItem)tabs.SelectedItem).Tag, session) &&
                     session.Visibility == Visibility.Visible && second.Visibility == Visibility.Collapsed,
                     "Opening an existing server did not select its tab.");
-                Require(ReferenceEquals(host.Child.Controls[0], client), "Opening an existing server recreated its native connection.");
+                Require(host.Child.Controls.Contains(client), "Opening an existing server recreated its native connection.");
                 tree.ContextMenu.Items.OfType<MenuItem>().Single(i => (string)i.Header == "Connect")
                     .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
                 Require(tabs.Items.Count == 2 && ReferenceEquals(((ListBoxItem)tabs.SelectedItem).Tag, session),
@@ -254,7 +284,7 @@ internal static class Program
                     "Focus Mode did not highlight only the active session.");
                 Capture((FrameworkElement)window.FindName("FocusStrip"), "artifacts/smoke/focus-sessions.png");
                 firstFocusButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                Require(ReferenceEquals(host.Child.Controls[0], client) && tabs.Items.Count == 2,
+                Require(host.Child.Controls.Contains(client) && tabs.Items.Count == 2,
                     "Focus Mode switching recreated or duplicated a connection.");
 
                 ((Button)window.FindName("ExitFocusButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -281,7 +311,7 @@ internal static class Program
                     var expectedBounds = DisplayPolicy.Fit(new(DesktopWidth(), DesktopHeight()), new(host.Child.ClientSize.Width, host.Child.ClientSize.Height));
                     Require(client.Bounds == new System.Drawing.Rectangle(expectedBounds.X, expectedBounds.Y, expectedBounds.Width, expectedBounds.Height),
                         "Leaving fullscreen did not refit the native viewport.");
-                    Require(ReferenceEquals(host.Child.Controls[0], client), "Leaving fullscreen recreated the session.");
+                    Require(host.Child.Controls.Contains(client), "Leaving fullscreen recreated the session.");
                     Require(((FrameworkElement)window.FindName("FocusStrip")).IsVisible, "Leaving fullscreen unexpectedly left Focus Mode.");
                     var finalBounds = client.Bounds;
                     var panelSize = host.Child.ClientSize;
@@ -307,7 +337,7 @@ internal static class Program
                 var actualSize = window.AddSession(profile with { Id = Guid.NewGuid(), Host = "actual-size.invalid", DisplayMode = DisplayMode.ActualSize }, "", connect: false);
                 await Task.Delay(250);
                 Require(actualSize.Status == "RDP control initialized (offline)", actualSize.Status);
-                var actualClient = ((WindowsFormsHost)actualSize.Content).Child.Controls[0];
+                var actualClient = ((WindowsFormsHost)actualSize.Content).Child.Controls.OfType<System.Windows.Forms.AxHost>().Single();
                 actualSize.RefreshDisplay();
                 await Task.Delay(100);
                 Require(!(bool)((dynamic)actualClient).AdvancedSettings2.SmartSizing, "Display refresh enabled scaling in Actual Size mode.");
@@ -363,7 +393,7 @@ internal static class Program
                 var dpiSession = window.AddSession(dpiProfile, "", connect: false);
                 await Task.Delay(250);
                 Require(dpiSession.Status == "RDP control initialized (offline)", dpiSession.Status);
-                var dpiClient = ((WindowsFormsHost)dpiSession.Content).Child.Controls[0];
+                var dpiClient = ((WindowsFormsHost)dpiSession.Content).Child.Controls.OfType<System.Windows.Forms.AxHost>().Single();
                 var dpiSettings = (MSTSCLib.IMsRdpExtendedSettings)((dynamic)dpiClient).GetOcx();
                 Require(Convert.ToInt32(dpiSettings.get_Property("DesktopScaleFactor")) == 175,
                     "The explicit remote DPI was not applied to the RDP control before connection.");
@@ -401,6 +431,10 @@ internal static class Program
                 window.AddSession(savedProfile, "", connect: false);
 
                 await HyperVPickerChecks.Run();
+                await HyperVLifecycleChecks.Run();
+                await SessionStatusChecks.CheckProgress();
+                await SessionConnectionChecks.Run(window);
+                await ElevationChecks.Run();
                 window.Close();
                 Require(client.IsDisposed && actualClient.IsDisposed, "Closing the window left native controls alive.");
                 Require(sessionStore.Load().SequenceEqual(new[] { savedProfile.Id }), "Application shutdown erased the tabs to restore.");
@@ -421,7 +455,7 @@ internal static class Program
                     Require(sessionStore.Load().Length == 0, "Declined restore or cancelled credentials left stale recovery state.");
                     window.Close();
                 }
-                Console.WriteLine("PASS: live session snapshots; tab-close removal; shutdown preservation; restore Yes/No and credential cancellation; deleted-profile filtering; persisted alphabetical/recent sort toggle; offline sessions excluded from history; saved auto-hide startup; repeated real-mouse hover/click/reopen; delayed dismissal; right-click popup lifetime; themed dropdown selection and checkbox input; confirmation Yes/No results; grouped tree; right-click Edit; existing-connection welcome; Windows Credential Manager round-trip; direct reconnect; sidebar overlay without viewport resize; RDP/Hyper-V activation; fullscreen scaling-reset recovery in normal/maximized Focus Mode; Actual Size remains unscaled; native disposal. No network connection attempted.");
+                Console.WriteLine("PASS: live session snapshots; tab-close removal; shutdown preservation; restore Yes/No and credential cancellation; deleted-profile filtering; persisted alphabetical/recent sort toggle; offline sessions excluded from history; saved auto-hide startup; repeated real-mouse hover/click/reopen; delayed dismissal; right-click popup lifetime; themed dropdown selection and checkbox input; confirmation Yes/No results; grouped tree; right-click Edit; existing-connection welcome; Windows Credential Manager round-trip; direct reconnect; sidebar overlay without viewport resize; RDP/Hyper-V activation; fullscreen scaling-reset recovery in normal/maximized Focus Mode; Actual Size remains unscaled; native disposal. Only a disposable loopback endpoint was connected; no remote host or VM was contacted.");
                 app.Shutdown(0);
             }
             catch (Exception ex)

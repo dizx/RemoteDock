@@ -17,7 +17,18 @@ namespace RemoteDock.App;
 public sealed class SessionView : UserControl, IDisposable
 {
     private readonly WindowsFormsHost _host = new();
-    private readonly Forms.Panel _panel = new() { BackColor = Color.FromArgb(11, 16, 24) };
+    private readonly Forms.Panel _panel = new() { BackColor = Color.Black };
+    private readonly Font _statusFont = new("Consolas", 24, System.Drawing.FontStyle.Bold);
+    private readonly Forms.Label _statusScreen = new()
+    {
+        BackColor = Color.Black, ForeColor = Color.FromArgb(80, 255, 128),
+        // Dock.Fill lets Label.AdjustSize briefly restore its default 100x23 size
+        // on Text changes. Four-sided anchoring keeps the opaque cover in place.
+        Anchor = Forms.AnchorStyles.Top | Forms.AnchorStyles.Bottom | Forms.AnchorStyles.Left | Forms.AnchorStyles.Right,
+        TextAlign = ContentAlignment.MiddleCenter,
+        Padding = new Forms.Padding(32), UseMnemonic = false, AutoEllipsis = false,
+        AccessibleName = "Session status", Cursor = Forms.Cursors.Default
+    };
     private readonly DispatcherTimer _resizeTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
     private AxMsRdpClient9NotSafeForScripting? _client;
     private PixelSize _desktop;
@@ -30,20 +41,34 @@ public sealed class SessionView : UserControl, IDisposable
     private bool _loggedIn;
     private bool _disposed;
     private readonly bool _connectOnLoad;
+    private bool _deferConnect;
+    private bool _remoteDisplayReady;
+    private string? _operationStatus;
+    private bool _preserveOperationResult;
+    private bool _showingStatus = true;
 
     public ConnectionProfile Profile { get; private set; }
+    internal bool ConnectsToHost => _connectOnLoad && !_deferConnect;
+    internal bool IsAwaitingConnection => _deferConnect;
+    internal bool IsDisconnected => (_initialized || _deferConnect) && !_disposed && !_reconnectQueued && (_client is null || _client.Connected == 0);
     public string Status { get; private set; } = "Preparing session";
     public event EventHandler? StatusChanged;
     public event EventHandler? ConnectionEstablished;
 
-    public SessionView(ConnectionProfile profile, string password, bool connectOnLoad = true)
+    public SessionView(ConnectionProfile profile, string password, bool connectOnLoad = true, bool deferConnect = false)
     {
         Profile = profile;
         RememberPassword(password);
         _connectOnLoad = connectOnLoad;
+        _deferConnect = deferConnect;
         _desktop = new(profile.DesktopWidth, profile.DesktopHeight);
         Content = _host;
         _host.Child = _panel;
+        _host.Background = System.Windows.Media.Brushes.Black;
+        _statusScreen.Font = _statusFont;
+        _statusScreen.Bounds = _panel.ClientRectangle;
+        _panel.Controls.Add(_statusScreen);
+        SetStatus(Status);
         _panel.Resize += PanelResized;
         _panel.DpiChangedAfterParent += PanelResized;
         _resizeTimer.Tick += ResizeRemoteDesktop;
@@ -52,7 +77,7 @@ public sealed class SessionView : UserControl, IDisposable
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        if (_initialized || _disposed) return;
+        if (_initialized || _disposed || _deferConnect) return;
         _initialized = true;
         InitializeClient();
     }
@@ -62,18 +87,28 @@ public sealed class SessionView : UserControl, IDisposable
         try
         {
             Profile.Validate();
+            // Keep the ActiveX window in-place active while connecting. OLE hiding can
+            // deactivate the control and its connection UI; cover it with the native label instead.
             var client = new AxMsRdpClient9NotSafeForScripting();
             _client = client;
             ((ISupportInitialize)_client).BeginInit();
             _panel.Controls.Add(_client);
+            _statusScreen.BringToFront();
             ((ISupportInitialize)_client).EndInit();
             _client.CreateControl();
 
-            _client.OnConnected += (_, _) => { if (_client == client) SetStatus("Connected; signing in…"); };
+            _client.OnConnected += (_, _) => { if (_client == client) ShowRemoteDisplay(); };
+            _client.OnAutoReconnecting2 += (_, args) =>
+            {
+                if (_client == client && !_preserveOperationResult)
+                    ShowSessionStatus($"Reconnecting…\nAttempt {args.attemptCount} of {args.maxAttemptCount}");
+            };
+            _client.OnAutoReconnected += (_, _) => { if (_client == client) ShowRemoteDisplay(); };
             _client.OnLoginComplete += (_, _) =>
             {
                 if (_client != client || _disposed) return;
                 _loggedIn = true;
+                _remoteDisplayReady = true;
                 SetStatus(DisplayDescription());
                 RefreshDisplay();
                 ConnectionEstablished?.Invoke(this, EventArgs.Empty);
@@ -81,20 +116,13 @@ public sealed class SessionView : UserControl, IDisposable
             _client.OnDisconnected += (_, args) =>
             {
                 if (_client != client || _disposed) return;
-                _loggedIn = false;
-                _resizeTimer.Stop();
-                if (_disposed) return;
                 string reason = _client.GetErrorDescription((uint)args.discReason, (uint)_client.ExtendedDisconnectReason);
-                SetStatus($"Disconnected: {reason} ({args.discReason})");
+                HandleDisconnected($"Disconnected: {reason} ({args.discReason})");
             };
-            _client.OnFatalError += (_, args) => { if (_client == client) SetStatus($"RDP error {args.errorCode}"); };
+            _client.OnFatalError += (_, args) => { if (_client == client) ShowSessionStatus($"RDP error {args.errorCode}"); };
             _client.OnRemoteDesktopSizeChange += (_, args) =>
             {
-                if (_client != client || args.width <= 0 || args.height <= 0 || _disposed) return;
-                _desktop = new(args.width, args.height);
-                LayoutClient();
-                RefreshDisplay();
-                if (_loggedIn) SetStatus(DisplayDescription());
+                if (_client == client) RemoteDesktopSizeChanged(args.width, args.height);
             };
 
             _desktop = DisplayPolicy.RequestedDesktop(Profile, PanelSize);
@@ -148,17 +176,17 @@ public sealed class SessionView : UserControl, IDisposable
             LayoutClient();
             if (_connectOnLoad)
             {
-                SetStatus($"Connecting to {Profile.Host}:{Profile.Port}…");
+                ShowSessionStatus($"Connecting to {Profile.Host}:{Profile.Port}…");
                 _client.Connect();
             }
             else
             {
-                SetStatus("RDP control initialized (offline)");
+                ShowSessionStatus("RDP control initialized (offline)");
             }
         }
         catch (Exception ex)
         {
-            SetStatus($"Cannot start session: {ex.Message}");
+            ShowSessionStatus($"Cannot start session: {ex.Message}");
         }
     }
 
@@ -177,10 +205,14 @@ public sealed class SessionView : UserControl, IDisposable
         if (savedPassword is not null) RememberPassword(savedPassword);
         else if (settings.UserName != Profile.UserName || settings.Domain != Profile.Domain) RememberPassword("");
         Profile = settings;
+        _deferConnect = false;
+        _initialized = true;
+        _operationStatus = null;
+        _preserveOperationResult = false;
         _reconnectQueued = true;
         _loggedIn = false;
         _resizeTimer.Stop();
-        SetStatus("Reconnecting…");
+        ShowSessionStatus("Reconnecting…");
         DisposeClient();
         Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -232,10 +264,10 @@ public sealed class SessionView : UserControl, IDisposable
         var panel = PanelSize;
         if (panel.Width < 1 || panel.Height < 1) return;
 
-        _panel.AutoScroll = Profile.DisplayMode == DisplayMode.ActualSize;
+        _panel.AutoScroll = _remoteDisplayReady && _operationStatus is null && Profile.DisplayMode == DisplayMode.ActualSize;
         if (Profile.DisplayMode == DisplayMode.ActualSize)
         {
-            _panel.AutoScrollMinSize = new Size(_desktop.Width, _desktop.Height);
+            _panel.AutoScrollMinSize = _panel.AutoScroll ? new Size(_desktop.Width, _desktop.Height) : Size.Empty;
             _client.Bounds = new Rectangle(_panel.AutoScrollPosition, new Size(_desktop.Width, _desktop.Height));
         }
         else
@@ -249,20 +281,20 @@ public sealed class SessionView : UserControl, IDisposable
 
     private void QueueResize()
     {
-        if (!_loggedIn || !DisplayPolicy.AllowsRemoteResize(Profile) || _disposed) return;
+        if (!_loggedIn || !_remoteDisplayReady || _operationStatus is not null || !DisplayPolicy.AllowsRemoteResize(Profile) || _disposed) return;
         _resizeTimer.Stop();
         _resizeTimer.Start();
     }
 
     public void RefreshDisplay()
     {
-        if (_disposed || _displayRefreshPending) return;
+        if (_disposed || _displayRefreshPending || !_remoteDisplayReady || _operationStatus is not null) return;
         _displayRefreshPending = true;
         // Run after WPF layout and the native resize callback have both finished.
         Dispatcher.BeginInvoke(new Action(() =>
         {
             _displayRefreshPending = false;
-            if (_disposed || _client is null || !IsVisible) return;
+            if (_disposed || _client is null || !IsVisible || !_remoteDisplayReady || _operationStatus is not null) return;
             try
             {
                 LayoutClient();
@@ -292,7 +324,7 @@ public sealed class SessionView : UserControl, IDisposable
     private void ResizeRemoteDesktop(object? sender, EventArgs e)
     {
         _resizeTimer.Stop();
-        if (!_loggedIn || _client is null || _disposed || !IsVisible ||
+        if (!_loggedIn || _client is null || _disposed || !IsVisible || !_remoteDisplayReady || _operationStatus is not null ||
             !DisplayPolicy.AllowsRemoteResize(Profile) || PanelSize.Width < 200 || PanelSize.Height < 200)
             return;
 
@@ -321,14 +353,98 @@ public sealed class SessionView : UserControl, IDisposable
             if (_disposed) return;
             LayoutClient();
             RefreshDisplay();
-            _client?.Focus();
+            if (_remoteDisplayReady && _operationStatus is null) _client?.Focus();
         }), DispatcherPriority.Input);
+    }
+
+    internal void BeginConnection()
+    {
+        if (_disposed || !_deferConnect) return;
+        _deferConnect = false;
+        _operationStatus = null;
+        _preserveOperationResult = false;
+        ShowSessionStatus("Preparing session…");
+        if (IsLoaded) OnLoaded(this, new RoutedEventArgs());
+    }
+
+    internal void ShowSessionStatus(string status)
+    {
+        _remoteDisplayReady = false;
+        SetStatus(status);
+    }
+
+    internal void ShowRemoteDisplay()
+    {
+        // Reveal on transport connection, before login, so basic Hyper-V boot/login screens remain usable.
+        _remoteDisplayReady = true;
+        _preserveOperationResult = false;
+        SetStatus(_loggedIn ? DisplayDescription() : "Connected; signing in…");
+        RefreshDisplay();
+    }
+
+    internal void RemoteDesktopSizeChanged(int width, int height)
+    {
+        if (_disposed || width <= 0 || height <= 0) return;
+        var size = new PixelSize(width, height);
+        // The renderer refresh can itself repeat the same notification. Do not feed
+        // unchanged dimensions back into another native resize/refresh cycle.
+        if (size == _desktop) return;
+        _desktop = size;
+        LayoutClient();
+        RefreshDisplay();
+        if (_loggedIn) SetStatus(DisplayDescription());
+    }
+
+    internal void ReportOperation(string status)
+    {
+        if (_disposed) return;
+        _operationStatus = status;
+        _preserveOperationResult = false;
+        SetStatus(status);
+    }
+
+    internal void FinishOperation(string? status = null)
+    {
+        if (_disposed) return;
+        _operationStatus = null;
+        if (status is not null)
+        {
+            _preserveOperationResult = true;
+            ShowSessionStatus(status);
+        }
+        else SetStatus(_remoteDisplayReady ? DisplayDescription() : Status);
+    }
+
+    internal void HandleDisconnected(string status)
+    {
+        if (_disposed) return;
+        _loggedIn = false;
+        _remoteDisplayReady = false;
+        _resizeTimer.Stop();
+        // Saving the VM can disconnect its console before or after the management job completes.
+        SetStatus(_preserveOperationResult ? Status : status);
     }
 
     private void SetStatus(string status)
     {
         if (_disposed) return;
-        Status = status;
+        Status = _operationStatus ?? status;
+        string text = $"{Profile.Name}\n\n{Status}";
+        if (_statusScreen.Text != text) _statusScreen.Text = text;
+        bool showStatus = !_remoteDisplayReady || _operationStatus is not null;
+        if (_showingStatus != showStatus)
+        {
+            _showingStatus = showStatus;
+            _statusScreen.Visible = showStatus;
+            if (showStatus)
+            {
+                _panel.AutoScroll = false;
+                _panel.AutoScrollMinSize = Size.Empty;
+                _panel.AutoScrollPosition = System.Drawing.Point.Empty;
+                _statusScreen.BringToFront();
+            }
+            LayoutClient();
+        }
         StatusChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -350,6 +466,7 @@ public sealed class SessionView : UserControl, IDisposable
         finally
         {
             _host.Dispose();
+            _statusFont.Dispose();
             _client = null;
         }
     }

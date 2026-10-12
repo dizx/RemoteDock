@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -29,22 +30,26 @@ public partial class MainWindow : Window
     private object? SelectedEntry => (ConnectionsList.SelectedItem as TreeViewItem)?.Tag;
     private Guid? SelectedGroupId => SelectedEntry switch { ConnectionGroup g => g.Id, ConnectionProfile p => p.GroupId, _ => null };
 
-    public MainWindow() : this(new ConnectionStore(Path.Combine(App.DataDirectory, "connections.json")),
-        new SessionStore(Path.Combine(App.DataDirectory, "sessions.json"))) { }
+    public MainWindow() : this((ElevationRetry?)null) { }
 
-    internal MainWindow(ConnectionStore store, SessionStore? sessionStore = null)
+    internal MainWindow(ElevationRetry? retry) : this(new ConnectionStore(Path.Combine(retry?.DataDirectory ?? App.DataDirectory, "connections.json")),
+        new SessionStore(Path.Combine(retry?.DataDirectory ?? App.DataDirectory, "sessions.json")), retry) { }
+
+    internal MainWindow(ConnectionStore store, SessionStore? sessionStore = null, ElevationRetry? retry = null)
     {
         _store = store;
         _sessionStore = sessionStore;
+        _elevationRetry = retry;
         InitializeComponent();
+        AddVmMenuItems(ConnectionsList.ContextMenu, () => SelectedEntry as ConnectionProfile, 2);
         _sidebarHideTimer.Tick += HideSidebarAfterDelay;
         try { _catalog = _store.LoadCatalog(); }
         catch (Exception ex)
         {
             _storeReadable = false;
-            StatusText.Text = $"Connections could not be loaded: {ex.Message}";
+            SetStatusText($"Connections could not be loaded: {ex.Message}");
             Loaded += (_, _) => MessageDialog.ShowMessage(this,
-                $"The connection file could not be read and has been preserved.\n\n{ex.Message}\n\n{App.DataDirectory}",
+                $"The connection file could not be read and has been preserved.\n\n{ex.Message}\n\n{_store.DirectoryPath}",
                 "Connection file", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         AutoHideBox.IsChecked = _catalog.AutoHideConnections;
@@ -53,38 +58,40 @@ public partial class MainWindow : Window
         ContentRendered += RestorePreviousConnections;
     }
 
-    private void RestorePreviousConnections(object? sender, EventArgs e)
+    private async void RestorePreviousConnections(object? sender, EventArgs e)
     {
         ContentRendered -= RestorePreviousConnections;
         if (_sessionStore is null || !_storeReadable || _closing) return;
         try
         {
             var profiles = _catalog.Connections.ToDictionary(p => p.Id);
-            var previous = _sessionStore.Load().Where(profiles.ContainsKey).Select(id => profiles[id]).ToArray();
+            var previous = _sessionStore.Load().Where(profiles.ContainsKey)
+                .Where(id => id != _elevationRetry?.Profile.Id || _elevationRetry?.Action == ElevationAction.LoadVirtualMachines)
+                .Select(id => profiles[id]).ToArray();
             _sessionStateReady = true;
-            if (previous.Length == 0) return;
+            if (previous.Length == 0 && _elevationRetry is null) return;
 
             _restoringSessions = true;
             string names = string.Join(Environment.NewLine, previous.Select(p => p.Name));
-            var answer = MessageDialog.ShowMessage(this,
+            var answer = _elevationRetry is not null ? MessageBoxResult.Yes : MessageDialog.ShowMessage(this,
                 $"Reopen the connections from your previous session?\n\n{names}",
                 "Restore previous connections", MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (answer == MessageBoxResult.Yes)
             {
                 foreach (var profile in previous)
                 {
-                    if (_closing) break;
-                    Connect(profile);
+                    if (_closing || _closeRequested) break;
+                    await ConnectAsync(profile);
                 }
             }
+            if (_elevationRetry is not null && !_closing) await RetryElevatedActionAsync(_elevationRetry);
             _restoringSessions = false;
             SaveOpenSessions();
         }
         catch (Exception ex)
         {
             _sessionStateReady = true;
-            StatusText.Text = $"Previous connections could not be restored: {ex.Message}";
-            StatusText.ToolTip = StatusText.Text;
+            SetStatusText($"Previous connections could not be restored: {ex.Message}");
         }
         finally { _restoringSessions = false; }
     }
@@ -99,8 +106,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Open connections could not be remembered: {ex.Message}";
-            StatusText.ToolTip = StatusText.Text;
+            SetStatusText($"Open connections could not be remembered: {ex.Message}");
         }
     }
 
@@ -186,18 +192,19 @@ public partial class MainWindow : Window
         else if (SelectedEntry is ConnectionGroup group) EditGroup(group);
     }
 
-    private void EditConnection(ConnectionProfile? existing)
+    private void EditConnection(ConnectionProfile? existing, bool loadVirtualMachines = false)
     {
         try
         {
             bool hasPassword = existing is not null && CredentialStore.Read(CredentialStore.ConnectionTarget(existing.Id)) is not null;
             var editor = new ConnectionEditor(existing, _catalog, SelectedGroupId, hasPassword) { Owner = this };
+            if (loadVirtualMachines) editor.ContentRendered += async (_, _) => await editor.LoadVirtualMachinesAsync();
             if (editor.ShowDialog() != true || editor.Result is not { } profile) return;
             var updated = _catalog with { Connections = _catalog.Connections.Where(p => p.Id != profile.Id).Append(profile).ToArray() };
             if (!SaveCatalog(updated, CredentialStore.ConnectionTarget(profile.Id), profile.Kind != ConnectionKind.HyperV && editor.RememberPassword,
                 editor.TakePassword(), _catalog.Resolve(profile).UserName)) return;
             RefreshConnections(profile.Id);
-            StatusText.Text = "Connection saved. Reconnect to apply updated settings.";
+            SetStatusText("Connection saved. Reconnect to apply updated settings.");
         }
         catch (Exception ex) { ShowError(ex, "Connection settings"); }
     }
@@ -212,7 +219,7 @@ public partial class MainWindow : Window
             var updated = _catalog with { Groups = _catalog.Groups.Where(g => g.Id != result.Id).Append(result).ToArray() };
             if (!SaveCatalog(updated, CredentialStore.GroupTarget(result.Id), editor.RememberPassword, editor.TakePassword(), updated.GroupDefaults(result.Id).UserName)) return;
             RefreshConnections(result.Id);
-            StatusText.Text = "Group saved. Its inherited settings apply when connections are opened or reconnected.";
+            SetStatusText("Group saved. Its inherited settings apply when connections are opened or reconnected.");
         }
         catch (Exception ex) { ShowError(ex, "Group settings"); }
     }
@@ -224,7 +231,7 @@ public partial class MainWindow : Window
         if (!CommitImport(imported)) return;
         RefreshConnections(imported.Connections.FirstOrDefault()?.Id);
         int passwords = imported.Passwords.Count(p => !string.IsNullOrEmpty(p.Password) || p.WindowsProtected is not null);
-        StatusText.Text = $"Imported {imported.Connections.Length} connections, {imported.Groups.Length} groups and {passwords} passwords. Skipped {imported.SkippedCount} items.";
+        SetStatusText($"Imported {imported.Connections.Length} connections, {imported.Groups.Length} groups and {passwords} passwords. Skipped {imported.SkippedCount} items.");
         if (imported.Warnings.Count > 0) MessageDialog.ShowMessage(this, string.Join(Environment.NewLine, imported.Warnings.Distinct()), "Import notes");
     }
 
@@ -330,12 +337,12 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Connect_Click(object sender, RoutedEventArgs e) { if (SelectedEntry is ConnectionProfile profile) Connect(profile); }
-    private void ConnectAs_Click(object sender, RoutedEventArgs e)
+    private async void Connect_Click(object sender, RoutedEventArgs e) { if (SelectedEntry is ConnectionProfile profile) await ConnectAsync(profile); }
+    private async void ConnectAs_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedEntry is not ConnectionProfile profile) return;
         if (profile.Kind == ConnectionKind.HyperV) EditConnection(profile);
-        else Connect(profile, prompt: true);
+        else await ConnectAsync(profile, prompt: true);
     }
 
     private static TreeViewItem? ItemUnderPointer(DependencyObject? element)
@@ -350,14 +357,14 @@ public partial class MainWindow : Window
         if (ItemUnderPointer(e.OriginalSource as DependencyObject) is { } item) { item.IsSelected = true; item.Focus(); }
     }
 
-    private void Connection_DoubleClick(object sender, MouseButtonEventArgs e)
+    private async void Connection_DoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (ItemUnderPointer(e.OriginalSource as DependencyObject)?.Tag is ConnectionProfile profile) { e.Handled = true; Connect(profile); }
+        if (ItemUnderPointer(e.OriginalSource as DependencyObject)?.Tag is ConnectionProfile profile) { e.Handled = true; await ConnectAsync(profile); }
     }
 
-    private void Connection_KeyDown(object sender, KeyEventArgs e)
+    private async void Connection_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && SelectedEntry is ConnectionProfile profile) { e.Handled = true; Connect(profile); }
+        if (e.Key == Key.Enter && SelectedEntry is ConnectionProfile profile) { e.Handled = true; await ConnectAsync(profile); }
         else if (e.Key == Key.F2) { e.Handled = true; Edit_Click(sender, e); }
     }
 
@@ -375,12 +382,24 @@ public partial class MainWindow : Window
         return null;
     }
 
-    private void Connect(ConnectionProfile profile, bool prompt = false)
+    internal async Task ConnectAsync(ConnectionProfile profile, bool prompt = false)
     {
+        if (!TryBeginVmOperation(profile)) return;
+        SessionView? pending = null;
         try
         {
             var effective = _catalog.Resolve(profile);
-            if (ActivateExistingSession(effective) is not null) return;
+            if (ActivateExistingSession(effective) is { } existing)
+            {
+                if (effective.Kind == ConnectionKind.HyperV && (existing.ConnectsToHost || existing.IsAwaitingConnection) && existing.IsDisconnected)
+                {
+                    pending = existing;
+                    if (await VmActions.PrepareConnectAsync(effective, ConfirmVmAction, () => _closeRequested,
+                        existing.ReportOperation) && !_closeRequested && SessionSurface.Children.Contains(existing))
+                        existing.Reconnect(effective);
+                }
+                return;
+            }
             var saved = FindCredential(effective);
             string password = saved?.Password ?? "";
             if (!effective.UsesWindowsHostAuthentication && (prompt || (saved is null && !string.IsNullOrWhiteSpace(effective.UserName))))
@@ -400,15 +419,35 @@ public partial class MainWindow : Window
                 }
                 effective = _catalog.Resolve(updatedProfile);
             }
-            AddSession(effective, password);
+            if (effective.Kind == ConnectionKind.HyperV)
+            {
+                pending = AddSession(effective, password, deferConnect: true);
+                if (!await VmActions.PrepareConnectAsync(effective, ConfirmVmAction, () => _closeRequested, pending.ReportOperation))
+                {
+                    if (!_closeRequested) CloseSession(pending);
+                    return;
+                }
+                if (!_closeRequested) pending.BeginConnection();
+            }
+            else AddSession(effective, password);
         }
-        catch (Exception ex) { ShowError(ex, "Cannot connect"); }
+        catch (Exception ex) when (HyperVHost.ShouldOfferElevation(profile, ex))
+        {
+            pending?.FinishOperation("Administrator access is needed for local Hyper-V management.");
+            RequestElevation(profile, ElevationAction.Connect);
+        }
+        catch (Exception ex)
+        {
+            if (pending is not null) pending.FinishOperation($"Cannot connect: {ex.Message}");
+            else ShowError(ex, "Cannot connect");
+        }
+        finally { pending?.FinishOperation(); EndVmOperation(profile); }
     }
 
-    internal SessionView AddSession(ConnectionProfile profile, string password, bool connect = true)
+    internal SessionView AddSession(ConnectionProfile profile, string password, bool connect = true, bool deferConnect = false)
     {
         if (ActivateExistingSession(profile) is { } existing) return existing;
-        var session = new SessionView(profile, password, connect);
+        var session = new SessionView(profile, password, connect, deferConnect);
         session.StatusChanged += Session_StatusChanged;
         session.ConnectionEstablished += Session_ConnectionEstablished;
         var header = new StackPanel { Orientation = Orientation.Horizontal };
@@ -416,12 +455,13 @@ public partial class MainWindow : Window
             TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 200, ToolTip = profile.Name,
             VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(5, 0, 6, 0) });
         var close = new Button { Content = "×", Width = 20, Height = 20, Padding = new Thickness(0), Margin = new Thickness(0), ToolTip = "Close and disconnect session" };
-        close.Click += (_, e) => { e.Handled = true; CloseSession(session); };
+        close.Click += async (_, e) => { e.Handled = true; await RequestCloseSessionAsync(session); };
         header.Children.Add(close);
         var tab = new ListBoxItem { Content = header, Tag = session, Padding = new Thickness(3, 2, 3, 2), ToolTip = profile.Host, ContextMenu = new ContextMenu() };
         var edit = new MenuItem { Header = "Edit connection", Icon = new TextBlock { FontFamily = new FontFamily("Segoe MDL2 Assets"), Text = "\uE70F" } };
         edit.Click += (_, _) => { if (_catalog.Connections.FirstOrDefault(p => p.Id == session.Profile.Id) is { } saved) EditConnection(saved); };
         tab.ContextMenu.Items.Add(edit);
+        AddVmMenuItems(tab.ContextMenu, () => session.Profile);
         var focusButton = new Button { Tag = tab, Style = (Style)FindResource("FocusSessionButton") };
         focusButton.Click += FocusSession_Click;
         FocusSessionButtons.Children.Add(focusButton);
@@ -473,16 +513,20 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Connected, but last-connected history could not be saved: {ex.Message}";
-            StatusText.ToolTip = StatusText.Text;
+            SetStatusText($"Connected, but last-connected history could not be saved: {ex.Message}");
         }
     }
     private void UpdateStatus()
     {
-        StatusText.Text = ActiveSession?.Status ?? "Ready";
-        StatusText.ToolTip = StatusText.Text;
+        SetStatusText(ActiveSession?.Status ?? "Ready");
         Title = ActiveSession is { } active ? $"{active.Profile.Name} — RemoteDock" : "RemoteDock";
         ReconnectButton.IsEnabled = ActiveSession is not null;
+    }
+
+    private void SetStatusText(string status)
+    {
+        StatusText.Text = status.ReplaceLineEndings("\n").Split('\n', 2)[0].Trim();
+        StatusText.ToolTip = status;
     }
 
     private void UpdateWelcome()
@@ -496,10 +540,10 @@ public partial class MainWindow : Window
             : "Your saved connections are ready. Choose one from the connections panel or open it below.";
     }
 
-    private void Welcome_Click(object sender, RoutedEventArgs e)
+    private async void Welcome_Click(object sender, RoutedEventArgs e)
     {
         var profile = SelectedEntry as ConnectionProfile ?? _catalog.OrderConnections(_catalog.Connections).FirstOrDefault();
-        if (profile is null) EditConnection(null); else Connect(profile);
+        if (profile is null) EditConnection(null); else await ConnectAsync(profile);
     }
 
     private void CloseSession(SessionView session)
@@ -518,23 +562,39 @@ public partial class MainWindow : Window
         SaveOpenSessions();
     }
 
-    private void Reconnect_Click(object sender, RoutedEventArgs e)
+    private async void Reconnect_Click(object sender, RoutedEventArgs e)
     {
         if (ActiveSession is not { } session) return;
+        ConnectionProfile? operationProfile = null;
         try
         {
             var profile = _catalog.Connections.FirstOrDefault(p => p.Id == session.Profile.Id) ?? session.Profile;
             var effective = _catalog.Resolve(profile);
+            var lockProfile = session.Profile.Kind == ConnectionKind.HyperV ? session.Profile : effective;
+            if (!TryBeginVmOperation(lockProfile)) return;
+            operationProfile = lockProfile;
             if (ActivateExistingSession(effective, session) is not null) return;
+            if ((session.ConnectsToHost || session.IsAwaitingConnection) &&
+                !await VmActions.PrepareConnectAsync(effective, ConfirmVmAction, () => _closeRequested, session.ReportOperation)) return;
+            if (_closeRequested || !SessionSurface.Children.Contains(session)) return;
             session.Reconnect(effective, FindCredential(profile)?.Password);
-            if (Tabs.SelectedItem is ListBoxItem { Content: StackPanel header })
+            if (Tabs.Items.Cast<ListBoxItem>().FirstOrDefault(t => ReferenceEquals(t.Tag, session)) is { Content: StackPanel header })
             {
                 var label = (TextBlock)header.Children[0];
                 label.Text = session.Profile.Name.ReplaceLineEndings(" ");
                 label.ToolTip = session.Profile.Name;
             }
         }
-        catch (Exception ex) { ShowError(ex, "Cannot reconnect"); }
+        catch (Exception ex) when (HyperVHost.ShouldOfferElevation(operationProfile ?? session.Profile, ex))
+        {
+            session.FinishOperation("Administrator access is needed for local Hyper-V management.");
+            RequestElevation(operationProfile ?? session.Profile, ElevationAction.Connect);
+        }
+        catch (Exception ex) { session.FinishOperation($"Cannot reconnect: {ex.Message}"); }
+        finally
+        {
+            if (operationProfile is not null) { session.FinishOperation(); EndVmOperation(operationProfile); }
+        }
     }
 
     private void AutoHide_Click(object sender, RoutedEventArgs e)
@@ -649,7 +709,32 @@ public partial class MainWindow : Window
     }
 
     private void ShowError(Exception ex, string title) => MessageDialog.ShowMessage(this, ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error);
-    private void Window_Closing(object? sender, CancelEventArgs e)
+    private async void Window_Closing(object? sender, CancelEventArgs e)
+    {
+        if (_closing) return;
+        if (_closeRequested) { e.Cancel = true; return; }
+        var sessions = SessionSurface.Children.OfType<SessionView>().ToArray();
+        if (_vmOperation.CurrentCount == 0 || sessions.Any(s => s.ConnectsToHost && s.Profile.Kind == ConnectionKind.HyperV))
+        {
+            e.Cancel = true;
+            _closeRequested = true;
+            // Let the original Closing event finish before calling Close again.
+            await Task.Yield();
+            await _vmOperation.WaitAsync();
+            try
+            {
+                foreach (var session in SessionSurface.Children.OfType<SessionView>().ToArray())
+                    if (!await PrepareSessionDisconnectAsync(session)) { _closeRequested = false; return; }
+                FinishClosing();
+                Close();
+            }
+            finally { _vmOperation.Release(); }
+            return;
+        }
+        FinishClosing();
+    }
+
+    private void FinishClosing()
     {
         SaveOpenSessions();
         _closing = true;
