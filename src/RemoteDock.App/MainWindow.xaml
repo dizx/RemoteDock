@@ -77,7 +77,7 @@
       <Setter Property="ToolTip" Value="{Binding Content, RelativeSource={RelativeSource Self}}" />
       <Setter Property="ContentTemplate">
         <Setter.Value>
-          <DataTemplate><TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" /></DataTemplate>
+          <DataTemplate><TextBlock Text="{Binding}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" /></DataTemplate>
         </Setter.Value>
       </Setter>
       <Style.Triggers>

@@ -412,7 +412,9 @@ public partial class MainWindow : Window
         session.StatusChanged += Session_StatusChanged;
         session.ConnectionEstablished += Session_ConnectionEstablished;
         var header = new StackPanel { Orientation = Orientation.Horizontal };
-        header.Children.Add(new TextBlock { Text = profile.Name, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(5, 0, 6, 0) });
+        header.Children.Add(new TextBlock { Text = profile.Name.ReplaceLineEndings(" "), TextWrapping = TextWrapping.NoWrap,
+            TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 200, ToolTip = profile.Name,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(5, 0, 6, 0) });
         var close = new Button { Content = "×", Width = 20, Height = 20, Padding = new Thickness(0), Margin = new Thickness(0), ToolTip = "Close and disconnect session" };
         close.Click += (_, e) => { e.Handled = true; CloseSession(session); };
         header.Children.Add(close);
@@ -525,7 +527,12 @@ public partial class MainWindow : Window
             var effective = _catalog.Resolve(profile);
             if (ActivateExistingSession(effective, session) is not null) return;
             session.Reconnect(effective, FindCredential(profile)?.Password);
-            if (Tabs.SelectedItem is ListBoxItem { Content: StackPanel header }) ((TextBlock)header.Children[0]).Text = session.Profile.Name;
+            if (Tabs.SelectedItem is ListBoxItem { Content: StackPanel header })
+            {
+                var label = (TextBlock)header.Children[0];
+                label.Text = session.Profile.Name.ReplaceLineEndings(" ");
+                label.ToolTip = session.Profile.Name;
+            }
         }
         catch (Exception ex) { ShowError(ex, "Cannot reconnect"); }
     }
