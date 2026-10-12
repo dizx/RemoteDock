@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private readonly SessionStore? _sessionStore;
     private bool _sessionStateReady;
     private bool _restoringSessions;
+    private readonly List<Guid> _pendingRestoreIds = [];
     private bool _closing;
     private ConnectionCatalog _catalog = new();
     private readonly DispatcherTimer _sidebarHideTimer = new() { Interval = TimeSpan.FromMilliseconds(650) };
@@ -80,10 +81,12 @@ public partial class MainWindow : Window
                 "Restore previous connections", MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (answer == MessageBoxResult.Yes)
             {
+                _pendingRestoreIds.AddRange(previous.Select(profile => profile.Id));
                 foreach (var profile in previous)
                 {
                     if (_closing || _closeRequested) break;
                     await ConnectAsync(profile);
+                    _pendingRestoreIds.Remove(profile.Id);
                 }
             }
             if (_elevationRetry is not null && !_closing) await RetryElevatedActionAsync(_elevationRetry);
@@ -95,7 +98,11 @@ public partial class MainWindow : Window
             _sessionStateReady = true;
             SetStatusText($"Previous connections could not be restored: {ex.Message}");
         }
-        finally { _restoringSessions = false; }
+        finally
+        {
+            _pendingRestoreIds.Clear();
+            _restoringSessions = false;
+        }
     }
 
     private void SaveOpenSessions()
@@ -446,10 +453,13 @@ public partial class MainWindow : Window
         finally { pending?.FinishOperation(); EndVmOperation(profile); }
     }
 
+    internal Func<ConnectionProfile, string, bool, bool, SessionView> SessionFactory { get; set; } =
+        (profile, password, connect, deferConnect) => new(profile, password, connect, deferConnect);
+
     internal SessionView AddSession(ConnectionProfile profile, string password, bool connect = true, bool deferConnect = false)
     {
         if (ActivateExistingSession(profile) is { } existing) return existing;
-        var session = new SessionView(profile, password, connect, deferConnect);
+        var session = SessionFactory(profile, password, connect, deferConnect);
         session.StatusChanged += Session_StatusChanged;
         session.ConnectionEstablished += Session_ConnectionEstablished;
         var header = new StackPanel { Orientation = Orientation.Horizontal };

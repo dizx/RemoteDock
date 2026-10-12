@@ -126,8 +126,107 @@ internal static class ElevationChecks
             window.Close();
             Directory.Delete(sandbox, recursive: true);
         }
+        if (!HyperVHost.IsElevated)
+        {
+            await CheckElevationDuringRestore(vmFirst: true, cancelUac: false);
+            await CheckElevationDuringRestore(vmFirst: false, cancelUac: false);
+            await CheckElevationDuringRestore(vmFirst: true, cancelUac: true);
+            await CheckElevationDuringRestore(vmFirst: false, cancelUac: false, cancelRdp: true);
+        }
         Console.WriteLine("PASS: local-only elevation detection; empty inventory permission handling; restart payload; declined prompt/UAC cancellation; editor draft preservation; session preservation and state retry. Elevated launch was simulated.");
     }
+
+    private static async Task CheckElevationDuringRestore(bool vmFirst, bool cancelUac, bool cancelRdp = false)
+    {
+        string sandbox = Path.Combine(Path.GetTempPath(), "opencode", "RemoteDock.RestoreElevation", Guid.NewGuid().ToString("N"));
+        string catalogPath = Path.Combine(sandbox, "connections.json");
+        var store = new ConnectionStore(catalogPath);
+        var sessions = new SessionStore(Path.Combine(sandbox, "sessions.json"));
+        var rdp = new ConnectionProfile { Name = "Restored RDP", Host = "offline.invalid",
+            UserName = cancelRdp ? "cancel-restoration" : "" };
+        var vm = new ConnectionProfile { Name = "Restored VM", Host = "localhost", Port = 2179,
+            Kind = ConnectionKind.HyperV, VirtualMachineId = Guid.NewGuid() };
+        store.SaveCatalog(new() { Connections = [rdp, vm] });
+        Guid[] previous = vmFirst ? [vm.Id, rdp.Id] : [rdp.Id, vm.Id];
+        Guid[] expected = cancelRdp ? [vm.Id] : previous;
+        sessions.Save(previous);
+        var original = new MainWindow(store, sessions)
+        {
+            SessionFactory = OfflineSession,
+            VmActions = new() { GetAsync = _ => Task.FromException<HyperVVirtualMachine>(new HyperVElevationRequiredException()) }
+        };
+        MainWindow? replacement = null;
+        ElevationRetry? captured = null;
+        Guid[]? handoff = null;
+        bool closed = false;
+        original.Closed += (_, _) => closed = true;
+        original.StartElevated = request =>
+        {
+            captured = request;
+            handoff = sessions.Load();
+            return !cancelUac;
+        };
+        var answerDialogs = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+        answerDialogs.Tick += (_, _) =>
+        {
+            foreach (var credentials in Application.Current.Windows.OfType<CredentialsDialog>().ToArray())
+                if (cancelRdp && (credentials.Owner == original || credentials.Owner == replacement)) credentials.Close();
+            foreach (var dialog in Application.Current.Windows.OfType<MessageDialog>().ToArray())
+            {
+                if (dialog.Owner != original && dialog.Owner != replacement) continue;
+                bool yes = dialog.Title is "Restore previous connections" or "Administrator access needed";
+                ((Button)dialog.FindName(yes ? "ConfirmButton" : "DismissButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            }
+        };
+        answerDialogs.Start();
+        try
+        {
+            original.Show();
+            for (int i = 0; i < 250 && captured is null; i++) await Task.Delay(20);
+            Require(captured is not null, "Startup restoration did not reach the elevation handoff.");
+            Require(handoff is not null && handoff.Order().SequenceEqual(expected.Order()),
+                $"Elevation lost a restored or pending tab (VM first={vmFirst}, UAC cancelled={cancelUac}).");
+            await Task.Delay(150);
+            if (cancelUac)
+            {
+                Require(!closed && TabIds(original).Order().SequenceEqual(expected.Order()),
+                    "Cancelling UAC did not continue restoring the remaining RDP tab.");
+                Require(sessions.Load().Order().SequenceEqual(expected.Order()), "Cancelling UAC erased the restore list.");
+            }
+            else
+            {
+                Require(closed && sessions.Load().Order().SequenceEqual(expected.Order()),
+                    "Closing the original process lost the pending restore list.");
+                replacement = new MainWindow(new ConnectionStore(catalogPath), sessions, captured)
+                {
+                    SessionFactory = OfflineSession,
+                    VmActions = new() { GetAsync = _ => Task.FromResult(new HyperVVirtualMachine(vm.VirtualMachineId!.Value, vm.Name, 2)) }
+                };
+                replacement.Show();
+                for (int i = 0; i < 250 && TabIds(replacement).Length != expected.Length; i++) await Task.Delay(20);
+                Require(TabIds(replacement).Order().SequenceEqual(expected.Order()),
+                    "The replacement process lost a tab or reopened an explicitly cancelled connection.");
+                Require(sessions.Load().Order().SequenceEqual(expected.Order()), "The replacement process persisted an incomplete restore list.");
+            }
+        }
+        finally
+        {
+            original.VmActions = new() { GetAsync = _ => Task.FromResult(new HyperVVirtualMachine(vm.VirtualMachineId!.Value, vm.Name, 3)) };
+            if (replacement is not null) replacement.VmActions = original.VmActions;
+            replacement?.Close();
+            original.Close();
+            for (int i = 0; i < 250 && (original.IsVisible || replacement?.IsVisible == true); i++) await Task.Delay(20);
+            answerDialogs.Stop();
+            Directory.Delete(sandbox, recursive: true);
+        }
+        Console.WriteLine($"PASS: elevation during startup preserves requested tabs (VM first={vmFirst}, UAC cancelled={cancelUac}, RDP cancelled={cancelRdp}); host connections and replacement launch simulated.");
+    }
+
+    private static SessionView OfflineSession(ConnectionProfile profile, string password, bool connect, bool deferConnect) =>
+        new(profile, password, connectOnLoad: false, deferConnect: deferConnect);
+
+    private static Guid[] TabIds(MainWindow window) => ((ListBox)window.FindName("Tabs")).Items.Cast<ListBoxItem>()
+        .Select(item => ((SessionView)item.Tag).Profile.Id).ToArray();
 
     private static void AnswerNext(Window window, bool yes) => _ = window.Dispatcher.BeginInvoke(new Action(() =>
     {

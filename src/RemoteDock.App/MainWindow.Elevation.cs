@@ -24,11 +24,13 @@ public partial class MainWindow
                 "Administrator access needed", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
                 return false;
 
-            // Persist before launching the replacement, including when elevation is requested during restore.
+            // Startup can request elevation before all previous tabs have reopened.
+            // Carry forward both open tabs and the remaining accepted restore queue.
             if (_sessionStore is not null && _sessionStateReady && _storeReadable)
             {
                 var known = _catalog.Connections.Select(p => p.Id).ToHashSet();
-                _sessionStore.Save(Tabs.Items.Cast<ListBoxItem>().Select(t => ((SessionView)t.Tag).Profile.Id).Where(known.Contains));
+                _sessionStore.Save(Tabs.Items.Cast<ListBoxItem>().Select(t => ((SessionView)t.Tag).Profile.Id)
+                    .Concat(_pendingRestoreIds).Where(known.Contains).Distinct());
             }
             if (!StartElevated(new(profile, action, DataDirectory: _store.DirectoryPath)))
             {
