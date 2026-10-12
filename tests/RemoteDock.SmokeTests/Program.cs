@@ -194,6 +194,40 @@ internal static class Program
                 Require(second.Status == "RDP control initialized (offline)", second.Status);
                 Require(session.Visibility == Visibility.Collapsed, "Inactive session is still visible.");
 
+                var tabs = (ListBox)window.FindName("Tabs");
+                Require(ReferenceEquals(window.AddSession(profile, "", connect: false), session),
+                    "Opening the same connection created another session.");
+                Require(ReferenceEquals(window.AddSession(profile with { Id = Guid.NewGuid(), Host = "OFFLINE.INVALID.",
+                    UserName = "another-user", DisplayMode = DisplayMode.MatchPanel }, "", connect: false), session),
+                    "A second saved entry for the same endpoint created another session.");
+                Require(tabs.Items.Count == 2 && ReferenceEquals(((ListBoxItem)tabs.SelectedItem).Tag, session) &&
+                    session.Visibility == Visibility.Visible && second.Visibility == Visibility.Collapsed,
+                    "Opening an existing server did not select its tab.");
+                Require(ReferenceEquals(host.Child.Controls[0], client), "Opening an existing server recreated its native connection.");
+                tree.ContextMenu.Items.OfType<MenuItem>().Single(i => (string)i.Header == "Connect")
+                    .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                Require(tabs.Items.Count == 2 && ReferenceEquals(((ListBoxItem)tabs.SelectedItem).Tag, session),
+                    "Connecting through the saved entry created a duplicate session.");
+                bool duplicatePrompted = false;
+                _ = window.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (app.Windows.OfType<CredentialsDialog>().FirstOrDefault() is { } dialog)
+                    {
+                        duplicatePrompted = true;
+                        dialog.Close();
+                    }
+                }), DispatcherPriority.Background);
+                tree.ContextMenu.Items.OfType<MenuItem>().Single(i => (string)i.Header == "Connect as…")
+                    .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                await Task.Delay(100);
+                Require(!duplicatePrompted && tabs.Items.Count == 2, "An existing server prompted for another connection's credentials.");
+                Require(ReferenceEquals(window.AddSession(second.Profile with { Id = Guid.NewGuid(), EnhancedSession = true },
+                    "", connect: false), second), "Switching Hyper-V mode opened a duplicate connection to the same VM.");
+                var alternatePort = window.AddSession(profile with { Id = Guid.NewGuid(), Port = 3390 }, "", connect: false);
+                Require(!ReferenceEquals(alternatePort, session) && tabs.Items.Count == 3, "Different RDP endpoints were treated as duplicates.");
+                ((StackPanel)((ListBoxItem)tabs.SelectedItem).Content).Children.OfType<Button>().Single()
+                    .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
                 ((ListBox)window.FindName("Tabs")).SelectedIndex = 0;
                 await Task.Delay(100);
                 int originalWidth = client.Width;
@@ -203,6 +237,25 @@ internal static class Program
                 Require(((FrameworkElement)window.FindName("FocusStrip")).IsVisible, "Focus Mode has no local exit controls.");
                 Require(client.Width >= originalWidth, "Focus Mode reduced the remote viewport.");
                 Require(new PixelSize(DesktopWidth(), DesktopHeight()) == initialDesktop, "Focus Mode attempted offline renegotiation.");
+
+                var focusButtons = (StackPanel)window.FindName("FocusSessionButtons");
+                Require(focusButtons.Children.OfType<Button>().Select(b => (string)b.Content)
+                    .SequenceEqual(new[] { profile.Name, second.Profile.Name }), "Focus Mode did not show the open session names.");
+                var firstFocusButton = (Button)focusButtons.Children[0];
+                var secondFocusButton = (Button)focusButtons.Children[1];
+                var switchPoint = secondFocusButton.PointToScreen(new Point(secondFocusButton.ActualWidth / 2, secondFocusButton.ActualHeight / 2));
+                System.Windows.Forms.Cursor.Position = new((int)switchPoint.X, (int)switchPoint.Y);
+                MouseEvent(0x0002, 0, 0, 0, UIntPtr.Zero);
+                MouseEvent(0x0004, 0, 0, 0, UIntPtr.Zero);
+                await Task.Delay(150);
+                Require(ReferenceEquals(((ListBoxItem)tabs.SelectedItem).Tag, second) && second.Visibility == Visibility.Visible &&
+                    session.Visibility == Visibility.Collapsed, "Clicking a named Focus Mode button did not switch sessions.");
+                Require(secondFocusButton.FontWeight == FontWeights.SemiBold && firstFocusButton.FontWeight == FontWeights.Normal,
+                    "Focus Mode did not highlight only the active session.");
+                Capture((FrameworkElement)window.FindName("FocusStrip"), "artifacts/smoke/focus-sessions.png");
+                firstFocusButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Require(ReferenceEquals(host.Child.Controls[0], client) && tabs.Items.Count == 2,
+                    "Focus Mode switching recreated or duplicated a connection.");
 
                 ((Button)window.FindName("ExitFocusButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 ((Button)window.FindName("FullscreenButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -247,10 +300,11 @@ internal static class Program
                 ((Button)window.FindName("ExitFocusButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 window.WindowState = WindowState.Normal;
 
-                var enhanced = window.AddSession(second.Profile with { Id = Guid.NewGuid(), EnhancedSession = true }, "", connect: false);
+                var enhanced = window.AddSession(second.Profile with { Id = Guid.NewGuid(), VirtualMachineId = Guid.NewGuid(), EnhancedSession = true }, "", connect: false);
                 await Task.Delay(250);
                 Require(enhanced.Status == "RDP control initialized (offline)", enhanced.Status);
-                var actualSize = window.AddSession(profile with { Id = Guid.NewGuid(), DisplayMode = DisplayMode.ActualSize }, "", connect: false);
+                Require(!ReferenceEquals(enhanced, second), "Different VMs on the same Hyper-V host were treated as duplicates.");
+                var actualSize = window.AddSession(profile with { Id = Guid.NewGuid(), Host = "actual-size.invalid", DisplayMode = DisplayMode.ActualSize }, "", connect: false);
                 await Task.Delay(250);
                 Require(actualSize.Status == "RDP control initialized (offline)", actualSize.Status);
                 var actualClient = ((WindowsFormsHost)actualSize.Content).Child.Controls[0];
@@ -305,7 +359,7 @@ internal static class Program
                 }), DispatcherPriority.Background);
                 Require(dpiEditor.ShowDialog() == true && dpiEditor.Result?.RemoteDpiScalePercent == 175,
                     "The remote DPI dropdown did not save the selected value.");
-                var dpiProfile = profile with { Id = Guid.NewGuid(), RemoteDpiScalePercent = 175 };
+                var dpiProfile = profile with { Id = Guid.NewGuid(), Host = "dpi.invalid", RemoteDpiScalePercent = 175 };
                 var dpiSession = window.AddSession(dpiProfile, "", connect: false);
                 await Task.Delay(250);
                 Require(dpiSession.Status == "RDP control initialized (offline)", dpiSession.Status);
@@ -333,7 +387,10 @@ internal static class Program
                     Require(answer == (confirm ? MessageBoxResult.Yes : MessageBoxResult.No), "The themed confirmation returned the wrong choice.");
                 }
 
-                window.AddSession(savedProfile, "", connect: false);
+                var originalTab = tabs.Items.Cast<ListBoxItem>().Single(t => ReferenceEquals(t.Tag, session));
+                ((StackPanel)originalTab.Content).Children.OfType<Button>().Single().RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                var reopened = window.AddSession(savedProfile, "", connect: false);
+                Require(!ReferenceEquals(reopened, session), "Closing a server tab prevented opening a fresh session.");
                 await Task.Delay(200);
                 Require(new ConnectionStore(Path.Combine(sandbox, "connections.json")).LoadCatalog().Connections.Single(p => p.Id == savedProfile.Id).LastConnectedAt is null,
                     "Initializing an offline session incorrectly recorded a successful connection.");

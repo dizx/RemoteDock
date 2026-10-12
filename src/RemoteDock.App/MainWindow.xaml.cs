@@ -380,7 +380,8 @@ public partial class MainWindow : Window
         try
         {
             var effective = _catalog.Resolve(profile);
-            var saved = FindCredential(profile);
+            if (ActivateExistingSession(effective) is not null) return;
+            var saved = FindCredential(effective);
             string password = saved?.Password ?? "";
             if (!effective.UsesWindowsHostAuthentication && (prompt || (saved is null && !string.IsNullOrWhiteSpace(effective.UserName))))
             {
@@ -406,6 +407,7 @@ public partial class MainWindow : Window
 
     internal SessionView AddSession(ConnectionProfile profile, string password, bool connect = true)
     {
+        if (ActivateExistingSession(profile) is { } existing) return existing;
         var session = new SessionView(profile, password, connect);
         session.StatusChanged += Session_StatusChanged;
         session.ConnectionEstablished += Session_ConnectionEstablished;
@@ -418,6 +420,9 @@ public partial class MainWindow : Window
         var edit = new MenuItem { Header = "Edit connection", Icon = new TextBlock { FontFamily = new FontFamily("Segoe MDL2 Assets"), Text = "\uE70F" } };
         edit.Click += (_, _) => { if (_catalog.Connections.FirstOrDefault(p => p.Id == session.Profile.Id) is { } saved) EditConnection(saved); };
         tab.ContextMenu.Items.Add(edit);
+        var focusButton = new Button { Tag = tab, Style = (Style)FindResource("FocusSessionButton") };
+        focusButton.Click += FocusSession_Click;
+        FocusSessionButtons.Children.Add(focusButton);
         SessionSurface.Children.Add(session);
         Tabs.Items.Add(tab);
         Tabs.SelectedItem = tab;
@@ -426,12 +431,31 @@ public partial class MainWindow : Window
         return session;
     }
 
+    private SessionView? ActivateExistingSession(ConnectionProfile profile, SessionView? except = null)
+    {
+        var tab = Tabs.Items.Cast<ListBoxItem>().FirstOrDefault(t =>
+        {
+            var session = (SessionView)t.Tag;
+            var open = session.Profile;
+            return session != except && open.Kind == profile.Kind && open.Port == profile.Port &&
+                string.Equals(open.Host.Trim().TrimEnd('.'), profile.Host.Trim().TrimEnd('.'), StringComparison.OrdinalIgnoreCase) &&
+                (profile.Kind != ConnectionKind.HyperV || open.VirtualMachineId == profile.VirtualMachineId);
+        });
+        if (tab is null) return null;
+        Tabs.SelectedItem = tab;
+        Tabs.ScrollIntoView(tab);
+        var existing = (SessionView)tab.Tag;
+        existing.Activate();
+        return existing;
+    }
+
     private void Tab_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (SessionSurface is null) return;
         foreach (var session in SessionSurface.Children.OfType<SessionView>()) session.Visibility = session == ActiveSession ? Visibility.Visible : Visibility.Collapsed;
         ActiveSession?.Activate();
         UpdateStatus();
+        RevealFocusSession();
     }
 
     private void Session_StatusChanged(object? sender, EventArgs e) => UpdateStatus();
@@ -455,7 +479,6 @@ public partial class MainWindow : Window
     {
         StatusText.Text = ActiveSession?.Status ?? "Ready";
         StatusText.ToolTip = StatusText.Text;
-        FocusTitle.Text = ActiveSession is { } session ? $"{session.Profile.Name} · {session.Status}" : "RemoteDock";
         Title = ActiveSession is { } active ? $"{active.Profile.Name} — RemoteDock" : "RemoteDock";
         ReconnectButton.IsEnabled = ActiveSession is not null;
     }
@@ -484,6 +507,8 @@ public partial class MainWindow : Window
         session.ConnectionEstablished -= Session_ConnectionEstablished;
         session.Dispose();
         SessionSurface.Children.Remove(session);
+        var focusButton = FocusSessionButtons.Children.OfType<Button>().FirstOrDefault(b => ReferenceEquals(b.Tag, tab));
+        if (focusButton is not null) FocusSessionButtons.Children.Remove(focusButton);
         if (tab is not null) Tabs.Items.Remove(tab);
         if (Tabs.SelectedItem is null && Tabs.Items.Count > 0) Tabs.SelectedIndex = Tabs.Items.Count - 1;
         UpdateWelcome();
@@ -497,7 +522,9 @@ public partial class MainWindow : Window
         try
         {
             var profile = _catalog.Connections.FirstOrDefault(p => p.Id == session.Profile.Id) ?? session.Profile;
-            session.Reconnect(_catalog.Resolve(profile), FindCredential(profile)?.Password);
+            var effective = _catalog.Resolve(profile);
+            if (ActivateExistingSession(effective, session) is not null) return;
+            session.Reconnect(effective, FindCredential(profile)?.Password);
             if (Tabs.SelectedItem is ListBoxItem { Content: StackPanel header }) ((TextBlock)header.Children[0]).Text = session.Profile.Name;
         }
         catch (Exception ex) { ShowError(ex, "Cannot reconnect"); }
@@ -567,6 +594,7 @@ public partial class MainWindow : Window
         Toolbar.Visibility = Tabs.Visibility = StatusBar.Visibility = _focusMode ? Visibility.Collapsed : Visibility.Visible;
         FocusStrip.Visibility = _focusMode ? Visibility.Visible : Visibility.Collapsed;
         UpdateSidebarLayout();
+        RevealFocusSession();
         ActiveSession?.Activate();
     }
 
@@ -594,9 +622,19 @@ public partial class MainWindow : Window
         ActiveSession?.RefreshDisplay();
     }
 
-    private void Previous_Click(object sender, RoutedEventArgs e) => SelectRelative(-1);
-    private void Next_Click(object sender, RoutedEventArgs e) => SelectRelative(1);
-    private void SelectRelative(int offset) { if (Tabs.Items.Count > 0) Tabs.SelectedIndex = (Tabs.SelectedIndex + offset + Tabs.Items.Count) % Tabs.Items.Count; }
+    private void FocusSession_Click(object sender, RoutedEventArgs e)
+    {
+        Tabs.SelectedItem = ((Button)sender).Tag;
+        ActiveSession?.Activate();
+    }
+
+    private void RevealFocusSession()
+    {
+        if (!_focusMode) return;
+        Dispatcher.BeginInvoke(new Action(() => FocusSessionButtons.Children.OfType<Button>()
+            .FirstOrDefault(b => ReferenceEquals(b.Tag, Tabs.SelectedItem))?.BringIntoView()), DispatcherPriority.Loaded);
+    }
+
     private void Window_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.F11) { ToggleFullscreen(); e.Handled = true; }

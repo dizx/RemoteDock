@@ -75,12 +75,12 @@
         <StackPanel x:Name="DisplayFields">
         <TextBlock Text="Display mode" />
         <ComboBox x:Name="DisplayBox">
-          <ComboBoxItem Content="Scaled Fit — adaptive lower resolution, local scaling" />
+          <ComboBoxItem x:Name="ScaledFitModeItem" Content="Scaled Fit — adaptive lower resolution, local scaling" />
           <ComboBoxItem Content="Actual Size — fixed resolution, scroll to pan" />
           <ComboBoxItem Content="Match Panel — resize the remote desktop" />
         </ComboBox>
         <TextBlock Text="Scaled Fit resolution (fraction of panel dimensions)" />
-        <ComboBox x:Name="ScaleBox" AutomationProperties.Name="Resolution scale fraction" />
+        <ComboBox x:Name="ScaleBox" IsEnabled="{Binding IsSelected, ElementName=ScaledFitModeItem}" AutomationProperties.Name="Resolution scale fraction" />
         <TextBlock Text="For a 3840 × 2160 panel: 1/2 requests 1920 × 1080; 2/3 requests 2560 × 1440. The remote resolution follows window resizing."
                    TextWrapping="Wrap" Foreground="#A9BBCD" Margin="0,0,0,10" />
         <TextBlock Text="Remote DPI / scale" />

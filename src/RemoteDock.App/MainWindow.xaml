@@ -70,6 +70,24 @@
       <Setter Property="BorderBrush" Value="#354A61" />
       <Setter Property="ToolTipService.InitialShowDelay" Value="250" />
     </Style>
+    <Style x:Key="FocusSessionButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Padding" Value="10,2" />
+      <Setter Property="MaxWidth" Value="200" />
+      <Setter Property="Content" Value="{Binding Tag.Content.Children[0].Text, RelativeSource={RelativeSource Self}}" />
+      <Setter Property="ToolTip" Value="{Binding Content, RelativeSource={RelativeSource Self}}" />
+      <Setter Property="ContentTemplate">
+        <Setter.Value>
+          <DataTemplate><TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" /></DataTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding Tag.IsSelected, RelativeSource={RelativeSource Self}}" Value="True">
+          <Setter Property="Background" Value="#255266" />
+          <Setter Property="BorderBrush" Value="#74C7D8" />
+          <Setter Property="FontWeight" Value="SemiBold" />
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
   </Window.Resources>
   <Grid>
     <Grid.RowDefinitions>
@@ -91,14 +109,14 @@
       </DockPanel>
     </Border>
     <Border x:Name="FocusStrip" Grid.Row="1" Background="{StaticResource Surface}" Visibility="Collapsed">
-      <DockPanel Margin="8,0">
-        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-          <Button Content="Previous" Click="Previous_Click" Padding="8,2" />
-          <Button Content="Next" Click="Next_Click" Padding="8,2" />
+      <DockPanel Margin="8,3">
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top" Margin="8,0,0,0">
           <Button x:Name="ExitFocusButton" Content="Exit Focus" Click="Focus_Click" Padding="8,2" />
           <Button Content="Full screen / restore" Click="Fullscreen_Click" Padding="8,2" />
         </StackPanel>
-        <TextBlock x:Name="FocusTitle" VerticalAlignment="Center" Text="RemoteDock" TextTrimming="CharacterEllipsis" />
+        <ScrollViewer x:Name="FocusSessionsScroll" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+          <StackPanel x:Name="FocusSessionButtons" Orientation="Horizontal" />
+        </ScrollViewer>
       </DockPanel>
     </Border>
     <Grid x:Name="Workspace" Grid.Row="2" SizeChanged="Workspace_SizeChanged">
