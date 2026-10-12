@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <AssemblyName>RemoteDock</AssemblyName>
+    <RootNamespace>RemoteDock.App</RootNamespace>
     <AssemblyTitle>RemoteDock</AssemblyTitle>
     <Product>RemoteDock</Product>
     <TargetFramework>net10.0-windows</TargetFramework>

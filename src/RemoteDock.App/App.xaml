@@ -11,7 +11,7 @@
     <SolidColorBrush x:Key="Ink" Color="#EDF2F7" />
     <Style TargetType="Window">
       <Setter Property="local:WindowAppearance.DarkCaption" Value="True" />
-      <Setter Property="Icon" Value="/RemoteDock.App;component/Assets/RemoteDock.ico" />
+      <Setter Property="Icon" Value="/RemoteDock;component/Assets/RemoteDock.ico" />
       <Setter Property="Background" Value="#101722" />
       <Setter Property="Foreground" Value="{StaticResource Ink}" />
       <Setter Property="FontFamily" Value="Segoe UI" />

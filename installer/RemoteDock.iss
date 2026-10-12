@@ -29,7 +29,7 @@ MinVersion=10.0
 OutputDir=..\artifacts\installer
 OutputBaseFilename=RemoteDock-{#AppVersion}-win-x64-Setup
 SetupIconFile=..\src\RemoteDock.App\Assets\RemoteDock.ico
-UninstallDisplayIcon={app}\RemoteDock.App.exe
+UninstallDisplayIcon={app}\RemoteDock.exe
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -46,8 +46,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\RemoteDock"; Filename: "{app}\RemoteDock.App.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\RemoteDock"; Filename: "{app}\RemoteDock.App.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\RemoteDock"; Filename: "{app}\RemoteDock.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\RemoteDock"; Filename: "{app}\RemoteDock.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\RemoteDock.App.exe"; Description: "{cm:LaunchProgram,RemoteDock}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\RemoteDock.exe"; Description: "{cm:LaunchProgram,RemoteDock}"; Flags: shellexec nowait postinstall skipifsilent
