@@ -103,7 +103,7 @@ The script generates the RDP wrappers, publishes a self-contained Release build
 with the .NET runtime, and compiles `installer/RemoteDock.iss`. For a custom Inno
 Setup location, pass `-IsccPath "C:\path\to\ISCC.exe"`.
 
-Output: `artifacts/installer/RemoteDock-1.0.12-win-x64-Setup.exe`.
+Output: `artifacts/installer/RemoteDock-1.0.13-win-x64-Setup.exe`.
 Version metadata is defined in `Directory.Build.props`.
 The installed application and its shortcuts use `RemoteDock.exe`.
 
@@ -178,6 +178,14 @@ green status text. Start/resume and save operations show Hyper-V's reported
 percentage in that session area; some hosts report 0% until the job completes.
 100% is shown only after the target VM state is confirmed.
 The bottom status bar stays on one line, with full details in its tooltip.
+
+### Changes in 1.0.13
+
+- Fixed loss of pending RDP tabs when a Hyper-V connection requests elevation
+  during previous-session restoration. The restart preserves both open tabs and
+  connections still waiting to reopen.
+- Cancelling elevation continues restoring the remaining connections. Connections
+  explicitly cancelled during restoration stay closed.
 
 ### Changes in 1.0.12
 
