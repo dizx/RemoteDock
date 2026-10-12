@@ -53,6 +53,8 @@ public partial class MainWindow : Window
                 "Connection file", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         AutoHideBox.IsChecked = _catalog.AutoHideConnections;
+        StateChanged += (_, _) => { if (WindowState != WindowState.Minimized) _lastNonMinimizedState = WindowState; };
+        RestoreWindowPlacement();
         RefreshConnections();
         UpdateSidebarLayout();
         ContentRendered += RestorePreviousConnections;
@@ -672,6 +674,7 @@ public partial class MainWindow : Window
     {
         if (!_fullScreen)
         {
+            _preFullscreenPlacement = CaptureWindowPlacement();
             _previousState = WindowState;
             WindowState = WindowState.Normal;
             WindowStyle = WindowStyle.None;
@@ -736,6 +739,7 @@ public partial class MainWindow : Window
 
     private void FinishClosing()
     {
+        SaveWindowPlacement();
         SaveOpenSessions();
         _closing = true;
         SidebarPopup.IsOpen = false;

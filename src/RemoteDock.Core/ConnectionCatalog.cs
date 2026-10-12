@@ -13,6 +13,7 @@ public sealed record ConnectionCatalog
     public ConnectionGroup[] Groups { get; init; } = [];
     public bool AutoHideConnections { get; init; }
     public ConnectionSortOrder SortOrder { get; init; }
+    public WindowPlacement? WindowPlacement { get; init; }
 
     public IEnumerable<ConnectionProfile> OrderedConnections(Guid? groupId) =>
         OrderConnections(Connections.Where(p => p.GroupId == groupId));

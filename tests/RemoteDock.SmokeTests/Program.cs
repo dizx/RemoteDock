@@ -53,6 +53,7 @@ internal static class Program
                 if (args.Contains("--elevation-only"))
                 {
                     await ElevationChecks.Run();
+                    await WindowPlacementChecks.Run();
                     window.Close();
                     app.Shutdown(0);
                     return;
@@ -435,6 +436,7 @@ internal static class Program
                 await SessionStatusChecks.CheckProgress();
                 await SessionConnectionChecks.Run(window);
                 await ElevationChecks.Run();
+                await WindowPlacementChecks.Run();
                 window.Close();
                 Require(client.IsDisposed && actualClient.IsDisposed, "Closing the window left native controls alive.");
                 Require(sessionStore.Load().SequenceEqual(new[] { savedProfile.Id }), "Application shutdown erased the tabs to restore.");
