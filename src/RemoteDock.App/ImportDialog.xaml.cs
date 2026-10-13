@@ -26,7 +26,7 @@ public partial class ImportDialog : Window
         var picker = new OpenFileDialog
         {
             Title = "Import remote connections", Multiselect = true,
-            Filter = "Supported connections (*.xml;*.rdp)|*.xml;*.rdp|mRemoteNG XML (*.xml)|*.xml|Remote Desktop files (*.rdp)|*.rdp"
+            Filter = "Supported connections (*.json;*.xml;*.rdp)|*.json;*.xml;*.rdp|RemoteDock connections (*.json)|*.json|mRemoteNG XML (*.xml)|*.xml|Remote Desktop files (*.rdp)|*.rdp"
         };
         if (picker.ShowDialog(this) == true) SetPaths(picker.FileNames);
     }
@@ -52,9 +52,12 @@ public partial class ImportDialog : Window
         int skipped = 0;
         foreach (string path in paths)
         {
-            var batch = Path.GetExtension(path).Equals(".rdp", StringComparison.OrdinalIgnoreCase)
-                ? RdpFileImporter.Read(path, passwords, scaledFit)
-                : MRemoteNgImporter.Read(path, passwords, masterPassword, scaledFit);
+            var batch = Path.GetExtension(path).ToLowerInvariant() switch
+            {
+                ".json" => RemoteDockImporter.Read(path),
+                ".rdp" => RdpFileImporter.Read(path, passwords, scaledFit),
+                _ => MRemoteNgImporter.Read(path, passwords, masterPassword, scaledFit)
+            };
             catalog = batch.MergeInto(catalog);
             secrets.AddRange(batch.Passwords);
             warnings.AddRange(batch.Warnings);

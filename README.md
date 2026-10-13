@@ -44,14 +44,14 @@ restore list intact.
 
 - **Find it fast:** search saved connections or sort by name or most recently used.
 - **Organize once:** group connections and share settings through inheritance.
-- **Bring your setup:** import mRemoteNG XML and `.rdp` files.
+- **Bring your setup:** import RemoteDock `connections.json`, mRemoteNG XML and `.rdp` files.
 - **Sign in your way:** optionally remember RDP passwords in Windows Credential
   Manager, or enter them when connecting. Sign in to Hyper-V guests in the console.
 - **Keep work flowing:** clipboard sharing and optional remote Windows-key routing.
 
 ## Get connected
 
-1. Run **`RemoteDock-1.0.13-win-x64-Setup.exe`** and choose an all-users or
+1. Run **`RemoteDock-1.0.14-win-x64-Setup.exe`** and choose an all-users or
    current-user installation. The installer includes the .NET runtime.
 2. Add an **RDP** or **Hyper-V** connection, or import your existing connections.
 3. For Hyper-V, enter the host, click **Load VMs**, and select a VM by name.
@@ -152,7 +152,7 @@ The script generates the RDP wrappers, publishes a self-contained Release build
 with the .NET runtime, and compiles `installer/RemoteDock.iss`. For a custom Inno
 Setup location, pass `-IsccPath "C:\path\to\ISCC.exe"`.
 
-Output: `artifacts/installer/RemoteDock-1.0.13-win-x64-Setup.exe`.
+Output: `artifacts/installer/RemoteDock-1.0.14-win-x64-Setup.exe`.
 Version metadata is defined in `Directory.Build.props`.
 The installed application and its shortcuts use `RemoteDock.exe`.
 
@@ -196,6 +196,13 @@ Connection profiles live in `%LOCALAPPDATA%\RemoteDock\connections.json`.
 Username/domain can be saved. For RDP, choose whether to remember a password in
 Windows Credential Manager or enter it when connecting.
 
+To bring connections from another RemoteDock setup, choose **Import connections**
+and select its `connections.json`. Groups, RDP/Hyper-V endpoints and display
+settings are preserved. Usernames, domains, passwords, sign-in inheritance and
+connection history are ignored, along with personal window/sidebar preferences.
+Importing the same connections again updates them by ID rather than duplicating
+them; unrelated connections and local connection history are kept.
+
 For Hyper-V, specify the **host** address and port **2179**, then click **Load VMs**
 and select the virtual machine by its name and state. RemoteDock stores its GUID
 internally, so renaming the VM does not break the connection. Loading uses your
@@ -227,6 +234,15 @@ green status text. Start/resume and save operations show Hyper-V's reported
 percentage in that session area; some hosts report 0% until the job completes.
 100% is shown only after the target VM state is confirmed.
 The bottom status bar stays on one line, with full details in its tooltip.
+
+### Changes in 1.0.14
+
+- Import RemoteDock `connections.json` files alongside mRemoteNG XML and `.rdp`
+  files, preserving groups, RDP/Hyper-V endpoints and display settings.
+- RemoteDock imports ignore usernames, domains, passwords, sign-in inheritance,
+  connection history and personal app preferences.
+- Reimporting updates connections by ID without duplicates, preserving unrelated
+  connections, local history and app preferences.
 
 ### Changes in 1.0.13
 
