@@ -14,6 +14,7 @@ internal static class SessionConnectionChecks
 {
     internal static async Task Run(MainWindow window)
     {
+        await CheckRemoteSignOut(window);
         // Exercise the real ActiveX Connect/event path against a local disposable endpoint.
         // No remote machine, authentication, or VM state change is involved.
         using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -50,6 +51,44 @@ internal static class SessionConnectionChecks
             Console.WriteLine("PASS: real loopback RDP connection; native control stays active beneath status screen; progress does not change native visibility/size; connection failure reaches the green error screen.");
         }
         finally { await window.RequestCloseSessionAsync(session); }
+    }
+
+    private static async Task CheckRemoteSignOut(MainWindow window)
+    {
+        var tabs = (System.Windows.Controls.ListBox)window.FindName("Tabs");
+        var surface = (System.Windows.Controls.Panel)window.FindName("SessionSurface");
+        int initialTabs = tabs.Items.Count;
+        foreach (var (reason, extended) in new[] { (2, 0), (3, 2), (3, 12) })
+        {
+            var session = window.AddSession(new() { Name = "Sign-out probe", Host = "signout.invalid" }, "", connect: false);
+            await Task.Delay(100);
+            var panel = ((WindowsFormsHost)session.Content).Child;
+            session.HandleDisconnected("Misleading internal error", reason, extended);
+            Require(surface.Children.Contains(session) && !panel.IsDisposed,
+                "Remote sign-out disposed the ActiveX host inside its callback.");
+            await Task.Delay(100);
+            Require(tabs.Items.Count == initialTabs && !surface.Children.Contains(session) && panel.IsDisposed,
+                $"Remote sign-out ({reason}/{extended}) did not close and dispose its session tab.");
+        }
+
+        var retained = window.AddSession(new() { Name = "Disconnect probe", Host = "signout.invalid" }, "", connect: false);
+        try
+        {
+            await Task.Delay(100);
+            retained.HandleDisconnected("Disconnected: network failure", 2308, 0);
+            await Task.Delay(50);
+            Require(surface.Children.Contains(retained) && retained.Status.Contains("network failure"), "A transport failure closed its error tab.");
+            retained.ReportOperation("Saving state… 42%");
+            retained.HandleDisconnected("Disconnected during save", 2, 12);
+            await Task.Delay(50);
+            Require(surface.Children.Contains(retained) && retained.Status.Contains("42%"), "A save-time disconnect closed its progress tab.");
+            retained.FinishOperation("Saved · 100%");
+            retained.HandleDisconnected("Late disconnect", 2, 12);
+            await Task.Delay(50);
+            Require(surface.Children.Contains(retained) && retained.Status.Contains("100%"), "A late disconnect closed the saved-state result.");
+        }
+        finally { await window.RequestCloseSessionAsync(retained); }
+        Console.WriteLine("PASS: remote sign-out closes/disposes its tab after the callback; transport failures and VM operation results remain visible.");
     }
 
     private static void Require(bool condition, string message)

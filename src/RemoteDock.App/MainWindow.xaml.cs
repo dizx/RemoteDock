@@ -462,6 +462,7 @@ public partial class MainWindow : Window
         var session = SessionFactory(profile, password, connect, deferConnect);
         session.StatusChanged += Session_StatusChanged;
         session.ConnectionEstablished += Session_ConnectionEstablished;
+        session.RemoteSessionEnded += Session_RemoteSessionEnded;
         var header = new StackPanel { Orientation = Orientation.Horizontal };
         header.Children.Add(new TextBlock { Text = profile.Name.ReplaceLineEndings(" "), TextWrapping = TextWrapping.NoWrap,
             TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 200, ToolTip = profile.Name,
@@ -513,6 +514,10 @@ public partial class MainWindow : Window
     }
 
     private void Session_StatusChanged(object? sender, EventArgs e) => UpdateStatus();
+    private void Session_RemoteSessionEnded(object? sender, EventArgs e)
+    {
+        if (sender is SessionView session) CloseSession(session);
+    }
     private void Session_ConnectionEstablished(object? sender, EventArgs e)
     {
         if (!_storeReadable || sender is not SessionView session || !_catalog.Connections.Any(p => p.Id == session.Profile.Id)) return;
@@ -563,6 +568,7 @@ public partial class MainWindow : Window
         var tab = Tabs.Items.Cast<ListBoxItem>().FirstOrDefault(t => ReferenceEquals(t.Tag, session));
         session.StatusChanged -= Session_StatusChanged;
         session.ConnectionEstablished -= Session_ConnectionEstablished;
+        session.RemoteSessionEnded -= Session_RemoteSessionEnded;
         session.Dispose();
         SessionSurface.Children.Remove(session);
         var focusButton = FocusSessionButtons.Children.OfType<Button>().FirstOrDefault(b => ReferenceEquals(b.Tag, tab));

@@ -54,6 +54,7 @@ public sealed class SessionView : UserControl, IDisposable
     public string Status { get; private set; } = "Preparing session";
     public event EventHandler? StatusChanged;
     public event EventHandler? ConnectionEstablished;
+    public event EventHandler? RemoteSessionEnded;
 
     public SessionView(ConnectionProfile profile, string password, bool connectOnLoad = true, bool deferConnect = false)
     {
@@ -117,7 +118,7 @@ public sealed class SessionView : UserControl, IDisposable
             {
                 if (_client != client || _disposed) return;
                 string reason = _client.GetErrorDescription((uint)args.discReason, (uint)_client.ExtendedDisconnectReason);
-                HandleDisconnected($"Disconnected: {reason} ({args.discReason})");
+                HandleDisconnected($"Disconnected: {reason} ({args.discReason})", args.discReason, (int)_client.ExtendedDisconnectReason);
             };
             _client.OnFatalError += (_, args) => { if (_client == client) ShowSessionStatus($"RDP error {args.errorCode}"); };
             _client.OnRemoteDesktopSizeChange += (_, args) =>
@@ -415,12 +416,28 @@ public sealed class SessionView : UserControl, IDisposable
         else SetStatus(_remoteDisplayReady ? DisplayDescription() : Status);
     }
 
-    internal void HandleDisconnected(string status)
+    internal void HandleDisconnected(string status, int disconnectReason = 0, int extendedReason = 0)
     {
         if (_disposed) return;
         _loggedIn = false;
         _remoteDisplayReady = false;
         _resizeTimer.Stop();
+        // 2 is remote disconnection by user; extended 2/12 are API/user logoff.
+        // VM management can also end the transport: retain its progress/result screen.
+        if ((disconnectReason == 2 || extendedReason is 2 or 12) &&
+            _operationStatus is null && !_preserveOperationResult && !_reconnectQueued)
+        {
+            SetStatus("Remote session ended");
+            var client = _client;
+            // Never dispose the ActiveX control inside its own disconnect callback.
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (!_disposed && !_reconnectQueued && _client == client &&
+                    _operationStatus is null && !_preserveOperationResult)
+                    RemoteSessionEnded?.Invoke(this, EventArgs.Empty);
+            }), DispatcherPriority.Background);
+            return;
+        }
         // Saving the VM can disconnect its console before or after the management job completes.
         SetStatus(_preserveOperationResult ? Status : status);
     }
