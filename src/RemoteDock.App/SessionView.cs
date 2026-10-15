@@ -55,10 +55,14 @@ public sealed class SessionView : UserControl, IDisposable
     public event EventHandler? StatusChanged;
     public event EventHandler? ConnectionEstablished;
     public event EventHandler? RemoteSessionEnded;
+    internal Action<PixelSize, int> UpdateDisplaySettings { get; set; }
 
     public SessionView(ConnectionProfile profile, string password, bool connectOnLoad = true, bool deferConnect = false)
     {
         Profile = profile;
+        UpdateDisplaySettings = (size, dpiScale) => _client!.UpdateSessionDisplaySettings(
+            (uint)size.Width, (uint)size.Height, 0, 0, 0,
+            (uint)dpiScale, (uint)DisplayPolicy.RemoteDeviceScale(dpiScale));
         RememberPassword(password);
         _connectOnLoad = connectOnLoad;
         _deferConnect = deferConnect;
@@ -73,6 +77,7 @@ public sealed class SessionView : UserControl, IDisposable
         _panel.Resize += PanelResized;
         _panel.DpiChangedAfterParent += PanelResized;
         _resizeTimer.Tick += ResizeRemoteDesktop;
+        IsVisibleChanged += SessionVisibilityChanged;
         Loaded += OnLoaded;
     }
 
@@ -126,7 +131,11 @@ public sealed class SessionView : UserControl, IDisposable
                 if (_client == client) RemoteDesktopSizeChanged(args.width, args.height);
             };
 
-            _desktop = DisplayPolicy.RequestedDesktop(Profile, PanelSize);
+            // Loaded can run before the native host has its final layout. Never use
+            // its temporary/default bounds as the server's initial desktop size.
+            _desktop = TryGetStableViewport(out var viewport)
+                ? DisplayPolicy.RequestedDesktop(Profile, viewport)
+                : new(Profile.DesktopWidth, Profile.DesktopHeight);
             _lastRequestedSize = _desktop;
             _lastRequestedDpiScale = DisplayPolicy.RemoteDesktopScale(Profile, _panel.DeviceDpi);
             _client.Server = Profile.Host;
@@ -282,9 +291,36 @@ public sealed class SessionView : UserControl, IDisposable
 
     private void QueueResize()
     {
-        if (!_loggedIn || !_remoteDisplayReady || _operationStatus is not null || !DisplayPolicy.AllowsRemoteResize(Profile) || _disposed) return;
         _resizeTimer.Stop();
+        if (!_loggedIn || !_remoteDisplayReady || _operationStatus is not null || !DisplayPolicy.AllowsRemoteResize(Profile) ||
+            _disposed || !IsVisible) return;
         _resizeTimer.Start();
+    }
+
+    private void SessionVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        _resizeTimer.Stop();
+        if (IsVisible) RefreshDisplay();
+    }
+
+    private bool TryGetStableViewport(out PixelSize viewport)
+    {
+        viewport = default;
+        if (!IsVisible || !IsMeasureValid || !IsArrangeValid || !_host.IsMeasureValid || !_host.IsArrangeValid ||
+            Window.GetWindow(this)?.WindowState == WindowState.Minimized) return false;
+
+        var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(_host);
+        // Use the session's WPF allocation, not the host's ActualWidth/Height:
+        // WindowsFormsHost can mirror a temporary child size back into its own size.
+        var arranged = new PixelSize((int)Math.Round(ActualWidth * dpi.DpiScaleX),
+            (int)Math.Round(ActualHeight * dpi.DpiScaleY));
+        var native = PanelSize;
+        // Collapsing/reactivating a tab can temporarily resize the WinForms host.
+        // Only a native viewport matching the arranged WPF area may resize the server.
+        if (arranged.Width < 200 || arranged.Height < 200 ||
+            Math.Abs(native.Width - arranged.Width) > 1 || Math.Abs(native.Height - arranged.Height) > 1) return false;
+        viewport = native;
+        return true;
     }
 
     public void RefreshDisplay()
@@ -326,16 +362,15 @@ public sealed class SessionView : UserControl, IDisposable
     {
         _resizeTimer.Stop();
         if (!_loggedIn || _client is null || _disposed || !IsVisible || !_remoteDisplayReady || _operationStatus is not null ||
-            !DisplayPolicy.AllowsRemoteResize(Profile) || PanelSize.Width < 200 || PanelSize.Height < 200)
+            !DisplayPolicy.AllowsRemoteResize(Profile) || !TryGetStableViewport(out var viewport))
             return;
 
-        var size = DisplayPolicy.RequestedDesktop(Profile, PanelSize);
+        var size = DisplayPolicy.RequestedDesktop(Profile, viewport);
         int dpiScale = DisplayPolicy.RemoteDesktopScale(Profile, _panel.DeviceDpi);
         if (size == _lastRequestedSize && dpiScale == _lastRequestedDpiScale) return;
         try
         {
-            _client.UpdateSessionDisplaySettings((uint)size.Width, (uint)size.Height, 0, 0, 0,
-                (uint)dpiScale, (uint)DisplayPolicy.RemoteDeviceScale(dpiScale));
+            UpdateDisplaySettings(size, dpiScale);
             _lastRequestedSize = size;
             _lastRequestedDpiScale = dpiScale;
             RefreshDisplay();
@@ -472,6 +507,7 @@ public sealed class SessionView : UserControl, IDisposable
         _password.Dispose();
         _resizeTimer.Stop();
         _resizeTimer.Tick -= ResizeRemoteDesktop;
+        IsVisibleChanged -= SessionVisibilityChanged;
         Loaded -= OnLoaded;
         _panel.Resize -= PanelResized;
         _panel.DpiChangedAfterParent -= PanelResized;

@@ -65,6 +65,7 @@ internal static class Program
                     await SessionStatusChecks.Run(statusSession);
                     await SessionStatusChecks.CheckProgress();
                     await SessionConnectionChecks.Run(window);
+                    await SessionResizeChecks.Run(window);
                     window.Close();
                     app.Shutdown(0);
                     return;
@@ -175,6 +176,7 @@ internal static class Program
                 Require(session.Status == "RDP control initialized (offline)", session.Status);
 
                 await SessionStatusChecks.Run(session);
+                await SessionResizeChecks.Run(window);
 
                 var host = (WindowsFormsHost)session.Content;
                 var client = host.Child.Controls.OfType<System.Windows.Forms.AxHost>().Single();
