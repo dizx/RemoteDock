@@ -43,6 +43,61 @@ internal static class Program
                 await Task.Yield();
                 window = (MainWindow)app.MainWindow;
                 await Task.Delay(150);
+                if (args.Contains("--focus-caption-only"))
+                {
+                    window.Topmost = true;
+                    window.Activate();
+                    window.WindowState = WindowState.Normal;
+                    ((Button)window.FindName("FocusButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    foreach (var state in new[] { WindowState.Normal, WindowState.Maximized, WindowState.Normal, WindowState.Maximized })
+                    {
+                        window.WindowState = state;
+                        await Task.Delay(350);
+                        Require(((Image)window.FindName("FocusAppIcon")).IsVisible &&
+                            ((Image)window.FindName("FocusAppIcon")).Source is not null &&
+                            ((TextBlock)window.FindName("FocusAppTitle")).IsVisible &&
+                            ((TextBlock)window.FindName("FocusAppTitle")).Text == "RemoteDock",
+                            "Focus caption lost the application icon or title.");
+                        var workArea = System.Windows.Forms.Screen.FromHandle(new System.Windows.Interop.WindowInteropHelper(window).Handle).WorkingArea;
+                        foreach (string name in new[] { "FocusMinimizeButton", "FocusMaximizeButton", "FocusCloseButton" })
+                        {
+                            var button = (Button)window.FindName(name);
+                            var topLeft = button.PointToScreen(new Point(0, 0));
+                            var bottomRight = button.PointToScreen(new Point(button.ActualWidth, button.ActualHeight));
+                            Require(button.IsVisible && topLeft.X >= workArea.Left && topLeft.Y >= workArea.Top &&
+                                bottomRight.X <= workArea.Right && bottomRight.Y <= workArea.Bottom,
+                                $"Caption {name} is clipped in {state}: {topLeft}–{bottomRight}, work area {workArea}.");
+                        }
+                    }
+                    Directory.CreateDirectory("artifacts/smoke");
+                    Capture((FrameworkElement)window.FindName("FocusStrip"), "artifacts/smoke/focus-maximized-caption.png");
+                    var maximize = (Button)window.FindName("FocusMaximizeButton");
+                    var center = maximize.PointToScreen(new Point(maximize.ActualWidth / 2, maximize.ActualHeight / 2));
+                    System.Windows.Forms.Cursor.Position = new((int)center.X, (int)center.Y);
+                    MouseEvent(0x0002, 0, 0, 0, UIntPtr.Zero);
+                    MouseEvent(0x0004, 0, 0, 0, UIntPtr.Zero);
+                    await Task.Delay(250);
+                    Require(window.WindowState == WindowState.Normal, "Caption restore did not respond to a real mouse click.");
+                    if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
+                    {
+                        Require(DwmGetWindowAttribute(new System.Windows.Interop.WindowInteropHelper(window).Handle,
+                            33, out uint cornerPreference, sizeof(uint)) == 0 && cornerPreference == 2,
+                            "Windows rounded-corner preference was not applied.");
+                    }
+                    var origin = window.PointToScreen(new Point(0, 0));
+                    var dpi = VisualTreeHelper.GetDpi(window);
+                    using (var screenshot = new System.Drawing.Bitmap((int)(window.ActualWidth * dpi.DpiScaleX) + 20,
+                        (int)(window.ActualHeight * dpi.DpiScaleY) + 20))
+                    {
+                        using var graphics = System.Drawing.Graphics.FromImage(screenshot);
+                        graphics.CopyFromScreen((int)origin.X - 10, (int)origin.Y - 10, 0, 0, screenshot.Size);
+                        screenshot.Save("artifacts/smoke/focus-native-window.png", System.Drawing.Imaging.ImageFormat.Png);
+                    }
+                    Console.WriteLine("PASS: caption buttons remain completely within the monitor work area across normal/maximized transitions; real-mouse restore; caption screenshot captured.");
+                    window.Close();
+                    app.Shutdown(0);
+                    return;
+                }
                 if (args.Length == 3 && args[0] == "--live-hyperv")
                 {
                     await LiveHyperVChecks.Run(window, Guid.Parse(args[1]), Path.GetFullPath(args[2]));
@@ -268,6 +323,38 @@ internal static class Program
                 await Task.Delay(350);
                 Require(((FrameworkElement)window.FindName("Sidebar")).Visibility == Visibility.Collapsed, "Focus Mode retained the sidebar.");
                 Require(((FrameworkElement)window.FindName("FocusStrip")).IsVisible, "Focus Mode has no local exit controls.");
+                foreach (string buttonName in new[] { "FocusMinimizeButton", "FocusMaximizeButton", "FocusCloseButton" })
+                {
+                    var captionButton = (Button)window.FindName(buttonName);
+                    Require(captionButton.IsVisible && captionButton.ActualWidth > 0 && captionButton.ActualHeight > 0,
+                        $"Focus Mode has no visible {buttonName}.");
+                }
+                var originalWindowState = window.WindowState;
+                for (int click = 0; click < 2; click++)
+                {
+                    var maximize = (Button)window.FindName("FocusMaximizeButton");
+                    var captionPoint = maximize.PointToScreen(new Point(maximize.ActualWidth / 2, maximize.ActualHeight / 2));
+                    System.Windows.Forms.Cursor.Position = new((int)captionPoint.X, (int)captionPoint.Y);
+                    MouseEvent(0x0002, 0, 0, 0, UIntPtr.Zero);
+                    MouseEvent(0x0004, 0, 0, 0, UIntPtr.Zero);
+                    await Task.Delay(250);
+                    Require(click == 0 ? window.WindowState != originalWindowState : window.WindowState == originalWindowState,
+                        "The Focus Mode caption button did not maximize/restore the window.");
+                    if (window.WindowState == WindowState.Maximized)
+                    {
+                        var workArea = System.Windows.Forms.Screen.FromHandle(new System.Windows.Interop.WindowInteropHelper(window).Handle).WorkingArea;
+                        foreach (string name in new[] { "FocusMinimizeButton", "FocusMaximizeButton", "FocusCloseButton" })
+                        {
+                            var button = (Button)window.FindName(name);
+                            var topLeft = button.PointToScreen(new Point(0, 0));
+                            var bottomRight = button.PointToScreen(new Point(button.ActualWidth, button.ActualHeight));
+                            Require(topLeft.X >= workArea.Left && topLeft.Y >= workArea.Top &&
+                                bottomRight.X <= workArea.Right && bottomRight.Y <= workArea.Bottom,
+                                $"Maximized caption {name} is clipped: {topLeft}–{bottomRight}, work area {workArea}.");
+                        }
+                        Capture((FrameworkElement)window.FindName("FocusStrip"), "artifacts/smoke/focus-maximized-caption.png");
+                    }
+                }
                 Require(client.Width >= originalWidth, "Focus Mode reduced the remote viewport.");
                 Require(new PixelSize(DesktopWidth(), DesktopHeight()) == initialDesktop, "Focus Mode attempted offline renegotiation.");
 
@@ -305,6 +392,23 @@ internal static class Program
                     await Task.Delay(100);
                     ((Button)window.FindName("FullscreenButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     await Task.Delay(350);
+                    var focusPopup = (Popup)window.FindName("FullscreenFocusPopup");
+                    var focusEdge = (FrameworkElement)window.FindName("FullscreenFocusEdge");
+                    var edgePoint = focusEdge.PointToScreen(new Point(focusEdge.ActualWidth / 2, 1));
+                    System.Windows.Forms.Cursor.Position = new((int)edgePoint.X, (int)edgePoint.Y);
+                    await Task.Delay(200);
+                    Require(focusPopup.IsOpen && secondFocusButton.IsVisible, "Fullscreen top edge did not reveal the session controls.");
+                    var popupButtonPoint = secondFocusButton.PointToScreen(new Point(secondFocusButton.ActualWidth / 2, secondFocusButton.ActualHeight / 2));
+                    System.Windows.Forms.Cursor.Position = new((int)popupButtonPoint.X, (int)popupButtonPoint.Y);
+                    MouseEvent(0x0002, 0, 0, 0, UIntPtr.Zero);
+                    MouseEvent(0x0004, 0, 0, 0, UIntPtr.Zero);
+                    await Task.Delay(150);
+                    Require(ReferenceEquals(((ListBoxItem)tabs.SelectedItem).Tag, second), "Fullscreen popup could not switch the native session.");
+                    var belowPopup = focusEdge.PointToScreen(new Point(focusEdge.ActualWidth / 2, 150));
+                    System.Windows.Forms.Cursor.Position = new((int)belowPopup.X, (int)belowPopup.Y);
+                    await Task.Delay(150);
+                    Require(!focusPopup.IsOpen, "Fullscreen controls did not hide after the pointer left.");
+                    firstFocusButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     dynamic rdp = client;
                     ((Button)window.FindName("FullscreenButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     await Task.Delay(450);
@@ -515,6 +619,9 @@ internal static class Program
         using var file = File.Create(path);
         encoder.Save(file);
     }
+
+    [DllImport("dwmapi.dll", ExactSpelling = true)]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out uint value, int size);
 
     [DllImport("user32.dll", EntryPoint = "mouse_event")]
     private static extern void MouseEvent(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);

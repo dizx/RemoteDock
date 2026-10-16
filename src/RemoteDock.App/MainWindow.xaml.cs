@@ -42,6 +42,9 @@ public partial class MainWindow : Window
         _sessionStore = sessionStore;
         _elevationRetry = retry;
         InitializeComponent();
+        StateChanged += (_, _) => ScheduleFocusCaptionLayout();
+        SizeChanged += (_, _) => ScheduleFocusCaptionLayout();
+        DpiChanged += (_, _) => ScheduleFocusCaptionLayout();
         AddVmMenuItems(ConnectionsList.ContextMenu, () => SelectedEntry as ConnectionProfile, 2);
         _sidebarHideTimer.Tick += HideSidebarAfterDelay;
         try { _catalog = _store.LoadCatalog(); }
@@ -668,7 +671,11 @@ public partial class MainWindow : Window
         if (SidebarPopup.IsOpen && !Sidebar.IsMouseOver && !SidebarRail.IsMouseOver && !ConnectionsList.ContextMenu.IsOpen)
             SidebarPopup.IsOpen = false;
     }
-    private void Window_Deactivated(object? sender, EventArgs e) => SidebarPopup.IsOpen = false;
+    private void Window_Deactivated(object? sender, EventArgs e)
+    {
+        SidebarPopup.IsOpen = false;
+        FullscreenFocusPopup.IsOpen = false;
+    }
     private void SidebarPopup_Closed(object? sender, EventArgs e) => _sidebarHideTimer.Stop();
     private void Workspace_SizeChanged(object sender, SizeChangedEventArgs e) { if (SidebarPopup?.IsOpen == true) Sidebar.Height = Math.Max(200, Workspace.ActualHeight); }
 
@@ -677,7 +684,7 @@ public partial class MainWindow : Window
     {
         _focusMode = !_focusMode;
         Toolbar.Visibility = Tabs.Visibility = StatusBar.Visibility = _focusMode ? Visibility.Collapsed : Visibility.Visible;
-        FocusStrip.Visibility = _focusMode ? Visibility.Visible : Visibility.Collapsed;
+        UpdateFocusChrome();
         UpdateSidebarLayout();
         RevealFocusSession();
         ActiveSession?.Activate();
@@ -690,6 +697,7 @@ public partial class MainWindow : Window
     {
         if (!_fullScreen)
         {
+            System.Windows.Shell.WindowChrome.SetWindowChrome(this, null);
             _preFullscreenPlacement = CaptureWindowPlacement();
             _previousState = WindowState;
             WindowState = WindowState.Normal;
@@ -705,6 +713,7 @@ public partial class MainWindow : Window
             WindowState = _previousState;
         }
         _fullScreen = !_fullScreen;
+        UpdateFocusChrome();
         ActiveSession?.RefreshDisplay();
     }
 

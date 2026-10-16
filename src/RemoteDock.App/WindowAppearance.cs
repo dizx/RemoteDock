@@ -41,6 +41,15 @@ public static class WindowAppearance
         _ = DwmSetWindowAttribute(handle, attribute, ref value, sizeof(uint));
     }
 
+    internal static void UpdateCornerPreference(Window window, bool customCaption, bool fullscreen)
+    {
+        var handle = new WindowInteropHelper(window).Handle;
+        if (handle == IntPtr.Zero) return;
+        // DWMWA_WINDOW_CORNER_PREFERENCE: default=0, do not round=1, round=2.
+        // DWM automatically uses square corners while maximized.
+        SetAttribute(handle, 33, fullscreen ? 1u : customCaption ? 2u : 0u);
+    }
+
     [DllImport("dwmapi.dll", ExactSpelling = true)]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref uint value, int size);
 }

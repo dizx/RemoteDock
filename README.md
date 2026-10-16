@@ -23,8 +23,11 @@ state** when you're done—ready to resume its work later.
 ### Find your focus
 
 Turn on **Focus Mode** to give your remote desktop the space it deserves.
-Navigation, tabs, and normal toolbars step aside, while a slim session switcher
-keeps your other connections and the way back within reach.
+Navigation, tabs, and normal toolbars step aside. Open sessions, **Exit Focus**,
+and **Full screen / restore** move into the title bar alongside the Windows
+window controls. Use the mouse wheel over the session buttons to scroll long lists.
+In fullscreen Focus Mode, move the pointer to the top edge to reveal these controls;
+they hide again when the pointer leaves the popup.
 
 Go full screen for even more room, or let the connection sidebar tuck itself
 away until you need it. Opening a connection that's already open takes you
@@ -51,7 +54,7 @@ restore list intact.
 
 ## Get connected
 
-1. Run **`RemoteDock-1.0.16-win-x64-Setup.exe`** and choose an all-users or
+1. Run **`RemoteDock-1.0.17-win-x64-Setup.exe`** and choose an all-users or
    current-user installation. The installer includes the .NET runtime.
 2. Add an **RDP** or **Hyper-V** connection, or import your existing connections.
 3. For Hyper-V, enter the host, click **Load VMs**, and select a VM by name.
@@ -120,10 +123,12 @@ interacting with those windows. Focused checks are also available:
 dotnet run --project tests/RemoteDock.SmokeTests -c Release -- --session-status-only
 dotnet run --project tests/RemoteDock.SmokeTests -c Release -- --hyperv-only
 dotnet run --project tests/RemoteDock.SmokeTests -c Release -- --elevation-only
+dotnet run --project tests/RemoteDock.SmokeTests -c Release -- --focus-caption-only
 ```
 
 These cover progress-screen stability and transport failures, simulated Hyper-V
-lifecycle operations, and simulated elevation handoff plus window persistence.
+lifecycle operations, simulated elevation handoff plus window persistence, and
+focus-mode caption layout, branding, rounded-corner preference, and mouse input.
 
 For a real Hyper-V cycle, run this explicitly from an elevated terminal with the
 GUID of a local, initially saved VM already in your connection catalog:
@@ -152,7 +157,7 @@ The script generates the RDP wrappers, publishes a self-contained Release build
 with the .NET runtime, and compiles `installer/RemoteDock.iss`. For a custom Inno
 Setup location, pass `-IsccPath "C:\path\to\ISCC.exe"`.
 
-Output: `artifacts/installer/RemoteDock-1.0.16-win-x64-Setup.exe`.
+Output: `artifacts/installer/RemoteDock-1.0.17-win-x64-Setup.exe`.
 Version metadata is defined in `Directory.Build.props`.
 The installed application and its shortcuts use `RemoteDock.exe`.
 

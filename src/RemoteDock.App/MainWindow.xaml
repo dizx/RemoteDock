@@ -89,7 +89,7 @@
       </Style.Triggers>
     </Style>
   </Window.Resources>
-  <Grid>
+  <Grid x:Name="WindowLayout">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
       <RowDefinition Height="*" /><RowDefinition Height="Auto" />
@@ -108,17 +108,80 @@
         </StackPanel>
       </DockPanel>
     </Border>
-    <Border x:Name="FocusStrip" Grid.Row="1" Background="{StaticResource Surface}" Visibility="Collapsed">
+    <ContentControl x:Name="FocusTitleHost" Grid.Row="1">
+    <Border x:Name="FocusStrip" Background="{StaticResource Surface}" Visibility="Collapsed" Height="36">
       <DockPanel Margin="8,3">
-        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top" Margin="8,0,0,0">
+        <StackPanel x:Name="FocusWindowButtons" DockPanel.Dock="Right" Orientation="Horizontal" Margin="8,-3,-8,-3" WindowChrome.IsHitTestVisibleInChrome="True">
+          <StackPanel.Resources>
+            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+              <Setter Property="Width" Value="46" />
+              <Setter Property="Margin" Value="0" />
+              <Setter Property="Padding" Value="0" />
+              <Setter Property="Background" Value="Transparent" />
+              <Setter Property="BorderThickness" Value="0" />
+              <Setter Property="FontFamily" Value="Segoe Fluent Icons" />
+              <Setter Property="FontSize" Value="10" />
+              <Setter Property="Template">
+                <Setter.Value>
+                  <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}">
+                      <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                  </ControlTemplate>
+                </Setter.Value>
+              </Setter>
+              <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#334457" /></Trigger>
+                <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="#455A70" /></Trigger>
+                <Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="Background" Value="#334457" /></Trigger>
+              </Style.Triggers>
+            </Style>
+          </StackPanel.Resources>
+          <Button x:Name="FocusMinimizeButton" Content="&#xE921;" Click="FocusMinimize_Click" ToolTip="Minimize" AutomationProperties.Name="Minimize" />
+          <Button x:Name="FocusMaximizeButton" Click="FocusMaximize_Click" AutomationProperties.Name="Maximize or restore">
+            <Button.Style>
+              <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                <Setter Property="Content" Value="&#xE922;" />
+                <Setter Property="ToolTip" Value="Maximize" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding WindowState, RelativeSource={RelativeSource AncestorType=Window}}" Value="Maximized">
+                    <Setter Property="Content" Value="&#xE923;" />
+                    <Setter Property="ToolTip" Value="Restore" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </Button.Style>
+          </Button>
+          <Button x:Name="FocusCloseButton" Content="&#xE8BB;" Click="FocusClose_Click" ToolTip="Close" AutomationProperties.Name="Close">
+            <Button.Style>
+              <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                <Style.Triggers>
+                  <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#C42B1C" /></Trigger>
+                  <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="#A52316" /></Trigger>
+                </Style.Triggers>
+              </Style>
+            </Button.Style>
+          </Button>
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0" WindowChrome.IsHitTestVisibleInChrome="True">
           <Button x:Name="ExitFocusButton" Content="Exit Focus" Click="Focus_Click" Padding="8,2" />
           <Button Content="Full screen / restore" Click="Fullscreen_Click" Padding="8,2" />
         </StackPanel>
-        <ScrollViewer x:Name="FocusSessionsScroll" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+        <Border DockPanel.Dock="Right" Width="40" Background="Transparent" />
+        <StackPanel x:Name="FocusBrand" DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,16,0">
+          <Image x:Name="FocusAppIcon" Source="{StaticResource RemoteDockMark}" Width="20" Height="20" Margin="0,0,7,0" />
+          <TextBlock x:Name="FocusAppTitle" Text="RemoteDock" FontWeight="SemiBold" VerticalAlignment="Center" />
+        </StackPanel>
+        <ScrollViewer x:Name="FocusSessionsScroll" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" VerticalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="True" PreviewMouseWheel="FocusSessions_MouseWheel">
           <StackPanel x:Name="FocusSessionButtons" Orientation="Horizontal" />
         </ScrollViewer>
       </DockPanel>
     </Border>
+    </ContentControl>
+    <Border x:Name="FullscreenFocusEdge" Grid.Row="1" Height="3" Background="{StaticResource Surface}" Visibility="Collapsed" MouseEnter="FullscreenFocusEdge_MouseEnter" />
+    <Popup x:Name="FullscreenFocusPopup" PlacementTarget="{Binding ElementName=FullscreenFocusEdge}" Placement="Bottom" StaysOpen="True" AllowsTransparency="True">
+      <ContentControl x:Name="FullscreenFocusHost" Width="{Binding ActualWidth, ElementName=FullscreenFocusEdge}" MouseLeave="FullscreenFocusHost_MouseLeave" />
+    </Popup>
     <Grid x:Name="Workspace" Grid.Row="2" SizeChanged="Workspace_SizeChanged">
       <Grid.ColumnDefinitions><ColumnDefinition x:Name="SidebarColumn" Width="240" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
       <Border x:Name="SidebarRail" Background="{StaticResource Surface}" Visibility="Collapsed" MouseEnter="RevealSidebar" MouseLeave="Sidebar_MouseLeave">
