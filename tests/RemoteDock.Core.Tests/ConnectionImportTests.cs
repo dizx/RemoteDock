@@ -124,15 +124,22 @@ public sealed class ConnectionImportTests : IDisposable
         Assert.ThrowsAny<Exception>(() => MRemoteNgImporter.Read(Write("unsafe.xml", "<!DOCTYPE Connections [<!ENTITY x SYSTEM 'file:///C:/secret'>]><Connections>&x;</Connections>")));
     }
 
-    [Fact]
-    public void Utf16RdpFilesPreserveEndpointCredentialsAndDisplay()
+    [Theory]
+    [InlineData(65001, false)]
+    [InlineData(65001, true)]
+    [InlineData(1200, false)]
+    [InlineData(1200, true)]
+    [InlineData(1201, false)]
+    [InlineData(1201, true)]
+    public void RdpEncodingsPreserveEndpointCredentialsAndDisplay(int codePage, bool byteOrderMark)
     {
-        string path = Write("Server.rdp", "full address:s:server.example:3390\r\nusername:s:DOMAIN\\operator\r\ndomain:s:DOMAIN\r\ndesktopwidth:i:1600\r\ndesktopheight:i:900\r\nredirectclipboard:i:0\r\nadministrative session:i:1\r\n", Encoding.Unicode);
+        Encoding encoding = codePage == 65001 ? new UTF8Encoding(byteOrderMark) : new UnicodeEncoding(codePage == 1201, byteOrderMark);
+        string path = Write("Server.rdp", "screen mode id:i:2\r\nfull address:s:server.example:3390\r\nusername:s:DOMAIN\\opérator\r\ndomain:s:DOMAIN\r\ndesktopwidth:i:1600\r\ndesktopheight:i:900\r\nredirectclipboard:i:0\r\nadministrative session:i:1\r\n", encoding);
         var imported = RdpFileImporter.Read(path, scaledFit: false);
         var profile = Assert.Single(imported.Connections);
         Assert.Equal("server.example", profile.Host);
         Assert.Equal(3390, profile.Port);
-        Assert.Equal("DOMAIN\\operator", profile.UserName);
+        Assert.Equal("DOMAIN\\opérator", profile.UserName);
         Assert.Equal(DisplayMode.ActualSize, profile.DisplayMode);
         Assert.Equal(1600, profile.DesktopWidth);
         Assert.False(profile.RedirectClipboard);

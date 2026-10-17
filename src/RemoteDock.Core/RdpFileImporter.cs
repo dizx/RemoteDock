@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 
 namespace RemoteDock.Core;
 
@@ -7,8 +8,18 @@ public static class RdpFileImporter
     public static ConnectionImport Read(string path, bool includePasswords = true, bool scaledFit = true)
     {
         if (new FileInfo(path).Length > 4_000_000) throw new InvalidDataException("The RDP file is too large.");
+        using var stream = File.OpenRead(path);
+        int first = stream.ReadByte();
+        int second = stream.ReadByte();
+        stream.Position = 0;
+        // RDP setting names start with ASCII characters. Some exporters write
+        // UTF-16 without a BOM; the NUL byte identifies the byte order.
+        Encoding encoding = first is > 0 and < 128 && second == 0 ? Encoding.Unicode
+            : first == 0 && second is > 0 and < 128 ? Encoding.BigEndianUnicode
+            : Encoding.UTF8;
+        using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string line in File.ReadLines(path))
+        while (reader.ReadLine() is { } line)
         {
             string[] parts = line.Split(':', 3);
             if (parts.Length == 3) values[parts[0].Trim()] = parts[2];

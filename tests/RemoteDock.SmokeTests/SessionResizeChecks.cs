@@ -15,6 +15,8 @@ internal static class SessionResizeChecks
 {
     internal static async Task Run(MainWindow window)
     {
+        await CheckRestoredSessionSizes(window);
+        await CheckPreLoginResize(window);
         var session = window.AddSession(new() { Name = "Resize probe", Host = "resize.invalid" }, "", connect: false);
         var requests = new List<PixelSize>();
         session.UpdateDisplaySettings = (size, _) => requests.Add(size);
@@ -68,6 +70,112 @@ internal static class SessionResizeChecks
             if (second is not null) await window.RequestCloseSessionAsync(second);
             await window.RequestCloseSessionAsync(session);
         }
+    }
+
+    private static async Task CheckRestoredSessionSizes(MainWindow window)
+    {
+        var sessions = new List<SessionView>();
+        double previousWidth = window.Width;
+        try
+        {
+            window.Width = previousWidth + 90;
+            for (int i = 0; i < 3; i++)
+                sessions.Add(window.AddSession(new()
+                {
+                    Name = $"Restored VM {i}", Host = "offline.invalid", Kind = ConnectionKind.HyperV,
+                    VirtualMachineId = Guid.NewGuid(), EnhancedSession = true, DisplayMode = DisplayMode.MatchPanel
+                }, "", connect: false));
+            await Task.Delay(350);
+            var surface = (FrameworkElement)window.FindName("SessionSurface");
+            var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(surface);
+            var expected = new PixelSize((int)Math.Round(surface.ActualWidth * dpi.DpiScaleX),
+                (int)Math.Round(surface.ActualHeight * dpi.DpiScaleY));
+            foreach (var session in sessions)
+            {
+                dynamic client = ((WindowsFormsHost)session.Content).Child.Controls.OfType<System.Windows.Forms.AxHost>().Single();
+                Require((int)client.DesktopWidth == expected.Width && (int)client.DesktopHeight == expected.Height,
+                    $"Restored VM (visible={session.IsVisible}) started at {(int)client.DesktopWidth}x{(int)client.DesktopHeight} instead of {expected}.");
+            }
+        }
+        finally
+        {
+            foreach (var session in sessions) await window.RequestCloseSessionAsync(session);
+            window.Width = previousWidth;
+            await Task.Delay(100);
+        }
+        Console.WriteLine("PASS: restored active and background VMs use the final workspace dimensions for their initial desktop.");
+    }
+
+    private static async Task CheckPreLoginResize(MainWindow window)
+    {
+        foreach (bool enhanced in new[] { true, false })
+        {
+            var session = window.AddSession(new()
+            {
+                Name = "Pre-login resize probe", Host = "offline.invalid", Kind = ConnectionKind.HyperV,
+                VirtualMachineId = Guid.NewGuid(), EnhancedSession = enhanced, DisplayMode = DisplayMode.MatchPanel
+            }, "", connect: false);
+            var requests = new List<PixelSize>();
+            session.UpdateDisplaySettings = (size, _) => requests.Add(size);
+            double previousWidth = window.Width;
+            try
+            {
+                await Task.Delay(150);
+                // The final viewport arrives after the initial connection size was chosen.
+                var initialPanel = ((WindowsFormsHost)session.Content).Child;
+                dynamic initialClient = initialPanel.Controls.OfType<System.Windows.Forms.AxHost>().Single();
+                if (enhanced)
+                    Require((int)initialClient.DesktopWidth == initialPanel.ClientSize.Width &&
+                        (int)initialClient.DesktopHeight == initialPanel.ClientSize.Height,
+                        $"Enhanced session started with a fallback resolution: {(int)initialClient.DesktopWidth}x{(int)initialClient.DesktopHeight}, viewport {initialPanel.ClientSize}.");
+                window.Width = previousWidth + 120;
+                await Task.Delay(450);
+                Require(requests.Count == 0, "An unconnected session tried to resize the remote desktop.");
+                session.ShowRemoteDisplay();
+                await Task.Delay(450);
+                var panel = ((WindowsFormsHost)session.Content).Child;
+                var client = panel.Controls.OfType<System.Windows.Forms.AxHost>().Single();
+                dynamic rdp = client;
+                var expected = new PixelSize(panel.ClientSize.Width, panel.ClientSize.Height);
+                Require(requests.Count == 0, "The login screen attempted an unsupported remote resize before login completed.");
+                Require(!(bool)rdp.AdvancedSettings2.SmartSizing && client.Bounds == panel.ClientRectangle,
+                    "Match Panel zoomed the login screen instead of using its native resolution.");
+                typeof(SessionView).GetField("_loggedIn", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(session, true);
+                session.RefreshDisplay();
+                await Task.Delay(450);
+                Require(enhanced ? requests.Count == 1 && requests[0] == expected : requests.Count == 0,
+                    $"Post-login {(enhanced ? "enhanced" : "basic")} console resize was incorrect: expected {(enhanced ? expected.ToString() : "no requests")}; got {string.Join(", ", requests)}.");
+                if (enhanced)
+                {
+                    session.RemoteDesktopSizeChanged(1024, 768);
+                    await Task.Delay(450);
+                    Require(requests.Count == 2 && requests[1] == expected,
+                        "A server-selected startup resolution prevented a request for the final viewport.");
+                    session.RemoteDesktopSizeChanged(1024, 768);
+                    await Task.Delay(450);
+                    Require(requests.Count == 2, "Duplicate remote size notifications caused repeated resize requests.");
+                    session.UpdateDisplaySettings = (size, _) =>
+                    {
+                        requests.Add(size);
+                        throw new System.Runtime.InteropServices.COMException("Simulated unsupported remote resize", unchecked((int)0x8000FFFF));
+                    };
+                    window.Width += 80;
+                    await Task.Delay(650);
+                    Require(session.Status.StartsWith("Connected · Remote resolution could not be changed") && !(bool)rdp.AdvancedSettings2.SmartSizing &&
+                        client.Bounds == panel.ClientRectangle,
+                        "Rejected remote resize silently enabled zoom in Match Panel mode.");
+                    await Task.Delay(450);
+                    Require(requests.Count == 3, "Rejected remote resize caused an automatic retry loop.");
+                }
+            }
+            finally
+            {
+                await window.RequestCloseSessionAsync(session);
+                window.Width = previousWidth;
+                await Task.Delay(100);
+            }
+        }
+        Console.WriteLine("PASS: enhanced sessions start at viewport resolution; Match Panel never zooms; remote resize waits for login and excludes basic consoles; rejected requests do not loop.");
     }
 
     private static void Require(bool condition, string message)

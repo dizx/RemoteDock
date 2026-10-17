@@ -74,10 +74,25 @@ internal static class Program
                     var maximize = (Button)window.FindName("FocusMaximizeButton");
                     var center = maximize.PointToScreen(new Point(maximize.ActualWidth / 2, maximize.ActualHeight / 2));
                     System.Windows.Forms.Cursor.Position = new((int)center.X, (int)center.Y);
+                    await Task.Delay(100);
                     MouseEvent(0x0002, 0, 0, 0, UIntPtr.Zero);
                     MouseEvent(0x0004, 0, 0, 0, UIntPtr.Zero);
                     await Task.Delay(250);
                     Require(window.WindowState == WindowState.Normal, "Caption restore did not respond to a real mouse click.");
+                    var brand = (FrameworkElement)window.FindName("FocusBrand");
+                    var dragPoint = brand.PointToScreen(new Point(brand.ActualWidth + 50, brand.ActualHeight / 2));
+                    double previousLeft = window.Left;
+                    double previousTop = window.Top;
+                    System.Windows.Forms.Cursor.Position = new((int)dragPoint.X, (int)dragPoint.Y);
+                    await Task.Delay(100);
+                    MouseEvent(0x0002, 0, 0, 0, UIntPtr.Zero);
+                    await Task.Delay(100);
+                    System.Windows.Forms.Cursor.Position = new((int)dragPoint.X + 40, (int)dragPoint.Y + 30);
+                    await Task.Delay(100);
+                    MouseEvent(0x0004, 0, 0, 0, UIntPtr.Zero);
+                    await Task.Delay(200);
+                    Require(window.Left > previousLeft + 10 && window.Top > previousTop + 10,
+                        "Dragging empty title-bar space did not move the window.");
                     if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
                     {
                         Require(DwmGetWindowAttribute(new System.Windows.Interop.WindowInteropHelper(window).Handle,

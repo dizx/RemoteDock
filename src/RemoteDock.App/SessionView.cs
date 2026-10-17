@@ -46,6 +46,7 @@ public sealed class SessionView : UserControl, IDisposable
     private string? _operationStatus;
     private bool _preserveOperationResult;
     private bool _showingStatus = true;
+    private readonly string? _displayTracePath = Environment.GetEnvironmentVariable("REMOTEDOCK_DISPLAY_TRACE");
 
     public ConnectionProfile Profile { get; private set; }
     internal bool ConnectsToHost => _connectOnLoad && !_deferConnect;
@@ -85,7 +86,13 @@ public sealed class SessionView : UserControl, IDisposable
     {
         if (_initialized || _disposed || _deferConnect) return;
         _initialized = true;
-        InitializeClient();
+        // Restoring several tabs invalidates layout while Loaded is running.
+        // Wait for the workspace and native hosts to finish arranging before
+        // choosing the resolution sent with the initial connection.
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!_disposed && !_deferConnect && !_reconnectQueued && _client is null) InitializeClient();
+        }), DispatcherPriority.ContextIdle);
     }
 
     private void InitializeClient()
@@ -114,6 +121,7 @@ public sealed class SessionView : UserControl, IDisposable
             {
                 if (_client != client || _disposed) return;
                 _loggedIn = true;
+                TraceDisplay("Login complete");
                 _remoteDisplayReady = true;
                 SetStatus(DisplayDescription());
                 RefreshDisplay();
@@ -133,7 +141,7 @@ public sealed class SessionView : UserControl, IDisposable
 
             // Loaded can run before the native host has its final layout. Never use
             // its temporary/default bounds as the server's initial desktop size.
-            _desktop = TryGetStableViewport(out var viewport)
+            _desktop = TryGetInitialViewport(out var viewport)
                 ? DisplayPolicy.RequestedDesktop(Profile, viewport)
                 : new(Profile.DesktopWidth, Profile.DesktopHeight);
             _lastRequestedSize = _desktop;
@@ -143,6 +151,7 @@ public sealed class SessionView : UserControl, IDisposable
             _client.Domain = Profile.UsesWindowsHostAuthentication ? "" : Profile.Domain;
             _client.DesktopWidth = _desktop.Width;
             _client.DesktopHeight = _desktop.Height;
+            TraceDisplay("Initial resolution configured");
             _client.ColorDepth = 32;
             _client.AdvancedSettings2.RDPPort = Profile.Port;
             _client.AdvancedSettings2.SmartSizing = Profile.DisplayMode == DisplayMode.ScaledFit;
@@ -303,6 +312,19 @@ public sealed class SessionView : UserControl, IDisposable
         if (IsVisible) RefreshDisplay();
     }
 
+    private bool TryGetInitialViewport(out PixelSize viewport)
+    {
+        if (TryGetStableViewport(out viewport)) return true;
+        // Background tabs have tiny/collapsed native hosts. They will occupy the
+        // same workspace when selected, so use its arranged size for startup only.
+        if (Parent is not FrameworkElement surface || !surface.IsMeasureValid || !surface.IsArrangeValid)
+            return false;
+        var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(surface);
+        viewport = new((int)Math.Round(surface.ActualWidth * dpi.DpiScaleX),
+            (int)Math.Round(surface.ActualHeight * dpi.DpiScaleY));
+        return viewport.Width >= 200 && viewport.Height >= 200;
+    }
+
     private bool TryGetStableViewport(out PixelSize viewport)
     {
         viewport = default;
@@ -370,14 +392,17 @@ public sealed class SessionView : UserControl, IDisposable
         if (size == _lastRequestedSize && dpiScale == _lastRequestedDpiScale) return;
         try
         {
+            TraceDisplay($"Request remote resize {size.Width}x{size.Height}, DPI {dpiScale}");
             UpdateDisplaySettings(size, dpiScale);
+            TraceDisplay("Remote resize call accepted");
             _lastRequestedSize = size;
             _lastRequestedDpiScale = dpiScale;
             RefreshDisplay();
         }
         catch (Exception ex)
         {
-            SetStatus($"Connected · Dynamic resize unavailable: {ex.Message}");
+            TraceDisplay($"Remote resize rejected: 0x{ex.HResult:X8} {ex.Message}");
+            SetStatus($"Connected · Remote resolution could not be changed.\n{ex.Message}");
         }
     }
 
@@ -411,6 +436,7 @@ public sealed class SessionView : UserControl, IDisposable
 
     internal void ShowRemoteDisplay()
     {
+        TraceDisplay("Transport connected");
         // Reveal on transport connection, before login, so basic Hyper-V boot/login screens remain usable.
         _remoteDisplayReady = true;
         _preserveOperationResult = false;
@@ -420,12 +446,16 @@ public sealed class SessionView : UserControl, IDisposable
 
     internal void RemoteDesktopSizeChanged(int width, int height)
     {
+        TraceDisplay($"Server reported resolution {width}x{height}");
         if (_disposed || width <= 0 || height <= 0) return;
         var size = new PixelSize(width, height);
         // The renderer refresh can itself repeat the same notification. Do not feed
         // unchanged dimensions back into another native resize/refresh cycle.
         if (size == _desktop) return;
         _desktop = size;
+        // The server can start at a different resolution than we requested.
+        // Do not let that stale request suppress fitting the final viewport.
+        if (_lastRequestedSize != size) _lastRequestedSize = null;
         LayoutClient();
         RefreshDisplay();
         if (_loggedIn) SetStatus(DisplayDescription());
@@ -498,6 +528,20 @@ public sealed class SessionView : UserControl, IDisposable
             LayoutClient();
         }
         StatusChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void TraceDisplay(string message)
+    {
+        if (string.IsNullOrWhiteSpace(_displayTracePath)) return;
+        try
+        {
+            System.IO.File.AppendAllText(_displayTracePath,
+                $"{DateTimeOffset.Now:O} session={Profile.Id} kind={Profile.Kind} enhanced={Profile.EnhancedSession} mode={Profile.DisplayMode} " +
+                $"loggedIn={_loggedIn} visible={IsVisible} viewport={PanelSize} desktop={_desktop} requested={_lastRequestedSize} " +
+                $"{message}{Environment.NewLine}");
+        }
+        catch (System.IO.IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     public void Dispose()

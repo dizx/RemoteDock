@@ -110,7 +110,7 @@
     </Border>
     <ContentControl x:Name="FocusTitleHost" Grid.Row="1">
     <Border x:Name="FocusStrip" Background="{StaticResource Surface}" Visibility="Collapsed" Height="36">
-      <DockPanel Margin="8,3">
+      <DockPanel Margin="8,3" Background="Transparent">
         <StackPanel x:Name="FocusWindowButtons" DockPanel.Dock="Right" Orientation="Horizontal" Margin="8,-3,-8,-3" WindowChrome.IsHitTestVisibleInChrome="True">
           <StackPanel.Resources>
             <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
@@ -172,7 +172,7 @@
           <Image x:Name="FocusAppIcon" Source="{StaticResource RemoteDockMark}" Width="20" Height="20" Margin="0,0,7,0" />
           <TextBlock x:Name="FocusAppTitle" Text="RemoteDock" FontWeight="SemiBold" VerticalAlignment="Center" />
         </StackPanel>
-        <ScrollViewer x:Name="FocusSessionsScroll" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" VerticalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="True" PreviewMouseWheel="FocusSessions_MouseWheel">
+        <ScrollViewer x:Name="FocusSessionsScroll" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" HorizontalAlignment="Left" VerticalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="True" PreviewMouseWheel="FocusSessions_MouseWheel">
           <StackPanel x:Name="FocusSessionButtons" Orientation="Horizontal" />
         </ScrollViewer>
       </DockPanel>
