@@ -15,11 +15,26 @@ public partial class MainWindow
         FullscreenFocusPopup.IsOpen = false;
         FocusTitleHost.Content = null;
         FullscreenFocusHost.Content = null;
+        FocusButton.IsEnabled = !_fullScreen;
+        ExitFocusButton.Visibility = _fullScreen ? Visibility.Collapsed : Visibility.Visible;
+        FocusFullscreenButton.Visibility = _multiMonitor ? Visibility.Collapsed : Visibility.Visible;
+        FocusFullscreenButton.Content = _fullScreen ? "Exit full screen" : "Full screen";
+        FocusMultiMonitorButton.Visibility = _multiMonitor ? Visibility.Visible : Visibility.Collapsed;
+        MultiMonitorButton.IsEnabled = !_focusMode && ActiveSession is { SupportsMultiMonitor: true };
 
-        bool fullscreenFocus = _focusMode && _fullScreen;
-        FocusStrip.Visibility = _focusMode ? Visibility.Visible : Visibility.Collapsed;
+        bool fullscreenFocus = _fullScreen;
+        FocusStrip.Visibility = _focusMode || _fullScreen ? Visibility.Visible : Visibility.Collapsed;
         FullscreenFocusEdge.Visibility = fullscreenFocus ? Visibility.Visible : Visibility.Collapsed;
         FocusWindowButtons.Visibility = fullscreenFocus ? Visibility.Collapsed : Visibility.Visible;
+
+        if (_multiMonitor)
+        {
+            FullscreenFocusEdge.Visibility = Visibility.Collapsed;
+            WindowLayout.Margin = new Thickness(0);
+            WindowChrome.SetWindowChrome(this, null);
+            WindowAppearance.UpdateCornerPreference(this, true, true);
+            return;
+        }
 
         if (fullscreenFocus)
             FullscreenFocusHost.Content = FocusStrip;
@@ -81,7 +96,7 @@ public partial class MainWindow
 
     private void FullscreenFocusEdge_MouseEnter(object sender, MouseEventArgs e)
     {
-        if (!_focusMode || !_fullScreen) return;
+        if (!_fullScreen) return;
         FullscreenFocusPopup.IsOpen = true;
         RevealFocusSession();
     }

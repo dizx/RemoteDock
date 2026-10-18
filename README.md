@@ -24,14 +24,37 @@ state** when you're done—ready to resume its work later.
 
 Turn on **Focus Mode** to give your remote desktop the space it deserves.
 Navigation, tabs, and normal toolbars step aside. Open sessions, **Exit Focus**,
-and **Full screen / restore** move into the title bar alongside the Windows
+and **Full screen** move into the title bar alongside the Windows
 window controls. Use the mouse wheel over the session buttons to scroll long lists.
-In fullscreen Focus Mode, move the pointer to the top edge to reveal these controls;
-they hide again when the pointer leaves the popup.
+Fullscreen is a separate, distraction-free view with no Focus/Normal toggle.
+Move the pointer to the top edge to reveal session controls and **Exit full screen**;
+they hide again when the pointer leaves the popup. Exiting returns to the windowed
+mode you entered from.
+
+Focus changes and window resizing briefly cover the remote desktop in black while
+the new resolution settles. The cover clears after confirmation or a short timeout.
 
 Go full screen for even more room, or let the connection sidebar tuck itself
 away until you need it. Opening a connection that's already open takes you
 straight to its existing tab.
+
+### One remote desktop across your monitors
+
+Select a session and click **Use all monitors** in the normal window's toolbar.
+Exit Focus Mode first if it is active.
+RemoteDock reconnects that session with native multi-monitor support. The remote
+desktop extends across your Windows displays, and switching server tabs switches
+the session on every monitor together. Other tabs reconnect for multi-monitor use
+when you first select them.
+
+Move the pointer to the top edge of the monitor where RemoteDock was opened to
+reveal the session controls. Choose **Exit all monitors** to return to the previous
+window layout. Changing the Windows monitor layout also returns to one monitor.
+
+Requires extended displays and either an RDP connection or a **Hyper-V Enhanced
+Session**. Hyper-V keeps its direct host/VM transport; no guest IP or guest RDP
+port is required. Basic Hyper-V consoles remain single-monitor. Multi-monitor
+mode uses the native monitor layout rather than Scaled Fit or single-panel sizing.
 
 ### Pick up where you left off
 
@@ -54,7 +77,7 @@ restore list intact.
 
 ## Get connected
 
-1. Run **`RemoteDock-1.0.22-win-x64-Setup.exe`** and choose an all-users or
+1. Run **`RemoteDock-1.0.32-win-x64-Setup.exe`** and choose an all-users or
    current-user installation. The installer includes the .NET runtime.
 2. Add an **RDP** or **Hyper-V** connection, or import your existing connections.
 3. For Hyper-V, enter the host, click **Load VMs**, and select a VM by name.
@@ -121,6 +144,7 @@ interacting with those windows. Focused checks are also available:
 
 ```powershell
 dotnet run --project tests/RemoteDock.SmokeTests -c Release -- --session-status-only
+dotnet run --project tests/RemoteDock.SmokeTests -c Release -- --multi-monitor-only
 dotnet run --project tests/RemoteDock.SmokeTests -c Release -- --hyperv-only
 dotnet run --project tests/RemoteDock.SmokeTests -c Release -- --elevation-only
 dotnet run --project tests/RemoteDock.SmokeTests -c Release -- --focus-caption-only
@@ -157,7 +181,7 @@ The script generates the RDP wrappers, publishes a self-contained Release build
 with the .NET runtime, and compiles `installer/RemoteDock.iss`. For a custom Inno
 Setup location, pass `-IsccPath "C:\path\to\ISCC.exe"`.
 
-Output: `artifacts/installer/RemoteDock-1.0.22-win-x64-Setup.exe`.
+Output: `artifacts/installer/RemoteDock-1.0.32-win-x64-Setup.exe`.
 Version metadata is defined in `Directory.Build.props`.
 The installed application and its shortcuts use `RemoteDock.exe`.
 

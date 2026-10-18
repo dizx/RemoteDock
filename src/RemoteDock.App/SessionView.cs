@@ -31,7 +31,19 @@ public sealed class SessionView : UserControl, IDisposable
     };
     private readonly DispatcherTimer _resizeTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
     private readonly DispatcherTimer _restartTimer = new() { Interval = TimeSpan.FromSeconds(5) };
+    private readonly Forms.Panel _transitionCover = new()
+    {
+        BackColor = Color.Black, Visible = false, TabStop = false,
+        Anchor = Forms.AnchorStyles.Top | Forms.AnchorStyles.Bottom | Forms.AnchorStyles.Left | Forms.AnchorStyles.Right,
+        AccessibleName = "Display transition"
+    };
+    private readonly DispatcherTimer _transitionTimer = new() { Interval = TimeSpan.FromMilliseconds(80) };
+    private long _transitionStarted;
+    private long _transitionLastResize;
+    internal bool IsDisplayTransitionCovered => _transitionTimer.IsEnabled;
     private DateTimeOffset? _restartDeadline;
+    private bool _useMultiMonitor;
+    private bool _clientUsesMultiMonitor;
     private AxMsRdpClient9NotSafeForScripting? _client;
     private PixelSize _desktop;
     private PixelSize? _lastRequestedSize;
@@ -58,6 +70,9 @@ public sealed class SessionView : UserControl, IDisposable
     public event EventHandler? StatusChanged;
     public event EventHandler? ConnectionEstablished;
     public event EventHandler? RemoteSessionEnded;
+    internal event EventHandler? LeaveMultiMonitorRequested;
+    internal bool SupportsMultiMonitor => Profile.Kind == ConnectionKind.Rdp || Profile.EnhancedSession;
+    internal bool UsesMultiMonitor => _useMultiMonitor;
     internal Action<PixelSize, int> UpdateDisplaySettings { get; set; }
 
     public SessionView(ConnectionProfile profile, string password, bool connectOnLoad = true, bool deferConnect = false)
@@ -76,6 +91,8 @@ public sealed class SessionView : UserControl, IDisposable
         _statusScreen.Font = _statusFont;
         _statusScreen.Bounds = _panel.ClientRectangle;
         _panel.Controls.Add(_statusScreen);
+        _panel.Controls.Add(_transitionCover);
+        _transitionTimer.Tick += CheckDisplayTransition;
         SetStatus(Status);
         _panel.Resize += PanelResized;
         _panel.DpiChangedAfterParent += PanelResized;
@@ -103,6 +120,7 @@ public sealed class SessionView : UserControl, IDisposable
         try
         {
             Profile.Validate();
+            _clientUsesMultiMonitor = _useMultiMonitor && SupportsMultiMonitor;
             // Keep the ActiveX window in-place active while connecting. OLE hiding can
             // deactivate the control and its connection UI; cover it with the native label instead.
             var client = new AxMsRdpClient9NotSafeForScripting();
@@ -147,12 +165,25 @@ public sealed class SessionView : UserControl, IDisposable
             {
                 if (_client == client) RemoteDesktopSizeChanged(args.width, args.height);
             };
+            _client.OnRequestLeaveFullScreen += (_, _) =>
+            {
+                if (_client == client && _useMultiMonitor)
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (!_disposed && _useMultiMonitor) LeaveMultiMonitorRequested?.Invoke(this, EventArgs.Empty);
+                    }));
+            };
 
             // Loaded can run before the native host has its final layout. Never use
             // its temporary/default bounds as the server's initial desktop size.
             _desktop = TryGetInitialViewport(out var viewport)
                 ? DisplayPolicy.RequestedDesktop(Profile, viewport)
                 : new(Profile.DesktopWidth, Profile.DesktopHeight);
+            if (_clientUsesMultiMonitor)
+            {
+                var bounds = Forms.SystemInformation.VirtualScreen;
+                _desktop = new(bounds.Width, bounds.Height);
+            }
             _lastRequestedSize = _desktop;
             _lastRequestedDpiScale = DisplayPolicy.RemoteDesktopScale(Profile, _panel.DeviceDpi);
             _client.Server = Profile.Host;
@@ -163,9 +194,20 @@ public sealed class SessionView : UserControl, IDisposable
             TraceDisplay("Initial resolution configured");
             _client.ColorDepth = 32;
             _client.AdvancedSettings2.RDPPort = Profile.Port;
-            _client.AdvancedSettings2.SmartSizing = Profile.DisplayMode == DisplayMode.ScaledFit;
+            _client.AdvancedSettings2.SmartSizing = !_clientUsesMultiMonitor && Profile.DisplayMode == DisplayMode.ScaledFit;
             var extended = (MSTSCLib.IMsRdpExtendedSettings)_client.GetOcx()!;
-            if (Profile.DisplayMode is DisplayMode.ScaledFit or DisplayMode.MatchPanel)
+            if (_clientUsesMultiMonitor)
+            {
+                // Let RemoteDock own the fullscreen container and keep the native
+                // multi-monitor layout intact (no single-desktop resize or zoom).
+                var native = (MSTSCLib.IMsRdpClientNonScriptable5)_client.GetOcx()!;
+                native.ConnectionBarText = Profile.Name;
+                _client.FullScreen = true;
+                _client.AdvancedSettings.ContainerHandledFullScreen = 1;
+                _client.AdvancedSettings2.DisplayConnectionBar = false;
+                native.UseMultimon = true;
+            }
+            if (!_clientUsesMultiMonitor && (Profile.DisplayMode is DisplayMode.ScaledFit or DisplayMode.MatchPanel))
             {
                 object enableZoom = true;
                 extended.set_Property("EnableZoom", ref enableZoom);
@@ -232,9 +274,20 @@ public sealed class SessionView : UserControl, IDisposable
         ReconnectCore(settings, savedPassword);
     }
 
+    internal void SetMultiMonitor(bool enabled, bool reconnect = true)
+    {
+        enabled &= SupportsMultiMonitor;
+        if (_disposed) return;
+        _useMultiMonitor = enabled;
+        if (enabled) EndDisplayTransition();
+        // Deferred restores must still wait for the user's normal connect action.
+        if (reconnect && _initialized && !_deferConnect && _operationStatus is null && !_preserveOperationResult &&
+            _clientUsesMultiMonitor != enabled) ReconnectCore(Profile);
+    }
+
     private void ReconnectCore(ConnectionProfile settings, string? savedPassword = null)
     {
-        if (_disposed || _reconnectQueued || _client?.Connected == 2) return;
+        if (_disposed || _reconnectQueued) return;
         settings.Validate();
         if (savedPassword is not null) RememberPassword(savedPassword);
         else if (settings.UserName != Profile.UserName || settings.Domain != Profile.Domain) RememberPassword("");
@@ -275,10 +328,25 @@ public sealed class SessionView : UserControl, IDisposable
     // Login completion and an accepted resize request do not mean the guest has
     // changed resolution. Fit its reported desktop until the size actually matches.
     private bool FitPendingDesktop => Profile.DisplayMode == DisplayMode.MatchPanel &&
-        (_desktop.Width != PanelSize.Width || _desktop.Height != PanelSize.Height);
+        !MatchesReportedDesktop(PanelSize, _desktop);
+
+    // The guest may round an odd requested width down to an even pixel count.
+    // Treat that response as confirmed instead of repeatedly requesting the odd width.
+    private static bool MatchesReportedDesktop(PixelSize requested, PixelSize reported) =>
+        requested == reported || requested.Height == reported.Height &&
+        (requested.Width & 1) != 0 && reported.Width == requested.Width - 1;
 
     private string DisplayDescription()
     {
+        if (_clientUsesMultiMonitor)
+        {
+            if (_client?.Connected == 1)
+            {
+                uint count = ((MSTSCLib.IMsRdpClientNonScriptable5)_client.GetOcx()!).RemoteMonitorCount;
+                return count > 1 ? $"Connected · {count} monitors" : "Connected · Server provided one monitor";
+            }
+            return "Connected · Multi-monitor";
+        }
         string mode = Profile.DisplayMode switch
         {
             DisplayMode.ScaledFit => $"Scaled Fit · {Profile.EffectiveScale} resolution",
@@ -293,8 +361,44 @@ public sealed class SessionView : UserControl, IDisposable
     private void PanelResized(object? sender, EventArgs e)
     {
         if (_disposed) return;
+        if (!_clientUsesMultiMonitor && !_useMultiMonitor) BeginDisplayTransition();
+        if (IsDisplayTransitionCovered)
+        {
+            _transitionLastResize = Environment.TickCount64;
+            _transitionCover.Bounds = _panel.ClientRectangle;
+            _transitionCover.BringToFront();
+        }
         LayoutClient();
         QueueResize();
+    }
+
+    internal void BeginDisplayTransition()
+    {
+        if (_disposed || !_remoteDisplayReady || _operationStatus is not null || !IsVisible) return;
+        _transitionStarted = _transitionLastResize = Environment.TickCount64;
+        _transitionCover.Bounds = _panel.ClientRectangle;
+        if (IsDisplayTransitionCovered) return;
+        _transitionCover.Visible = true;
+        _transitionCover.BringToFront();
+        _transitionCover.Update();
+        _transitionTimer.Start();
+        TraceDisplay("Display transition covered");
+    }
+
+    private void CheckDisplayTransition(object? sender, EventArgs e)
+    {
+        long now = Environment.TickCount64;
+        bool settled = now - _transitionStarted >= 400 && now - _transitionLastResize >= 160 &&
+            !_displayRefreshPending && TryGetStableViewport(out var viewport) &&
+            (!_loggedIn || !DisplayPolicy.AllowsRemoteResize(Profile) ||
+                MatchesReportedDesktop(DisplayPolicy.RequestedDesktop(Profile, viewport), _desktop));
+        if (settled || now - _transitionStarted >= 1600) EndDisplayTransition();
+    }
+
+    private void EndDisplayTransition()
+    {
+        _transitionTimer.Stop();
+        _transitionCover.Visible = false;
     }
 
     private void LayoutClient()
@@ -302,6 +406,14 @@ public sealed class SessionView : UserControl, IDisposable
         if (_client is null || _disposed) return;
         var panel = PanelSize;
         if (panel.Width < 1 || panel.Height < 1) return;
+
+        if (_clientUsesMultiMonitor)
+        {
+            _panel.AutoScroll = false;
+            _panel.AutoScrollMinSize = Size.Empty;
+            _client.Bounds = _panel.ClientRectangle;
+            return;
+        }
 
         _panel.AutoScroll = _remoteDisplayReady && _operationStatus is null && Profile.DisplayMode == DisplayMode.ActualSize;
         if (Profile.DisplayMode == DisplayMode.ActualSize)
@@ -321,7 +433,7 @@ public sealed class SessionView : UserControl, IDisposable
     private void QueueResize()
     {
         _resizeTimer.Stop();
-        if (!_loggedIn || !_remoteDisplayReady || _operationStatus is not null || !DisplayPolicy.AllowsRemoteResize(Profile) ||
+        if (_clientUsesMultiMonitor || !_loggedIn || !_remoteDisplayReady || _operationStatus is not null || !DisplayPolicy.AllowsRemoteResize(Profile) ||
             _disposed || !IsVisible) return;
         _resizeTimer.Start();
     }
@@ -329,6 +441,7 @@ public sealed class SessionView : UserControl, IDisposable
     private void SessionVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         _resizeTimer.Stop();
+        if (!IsVisible) EndDisplayTransition();
         if (IsVisible) RefreshDisplay();
     }
 
@@ -377,7 +490,7 @@ public sealed class SessionView : UserControl, IDisposable
             try
             {
                 LayoutClient();
-                bool smartSizing = Profile.DisplayMode == DisplayMode.ScaledFit || FitPendingDesktop;
+                bool smartSizing = !_clientUsesMultiMonitor && (Profile.DisplayMode == DisplayMode.ScaledFit || FitPendingDesktop);
                 _client.AdvancedSettings2.SmartSizing = smartSizing;
                 if (smartSizing)
                 {
@@ -404,7 +517,7 @@ public sealed class SessionView : UserControl, IDisposable
     private void ResizeRemoteDesktop(object? sender, EventArgs e)
     {
         _resizeTimer.Stop();
-        if (!_loggedIn || _client is null || _disposed || !IsVisible || !_remoteDisplayReady || _operationStatus is not null ||
+        if (_clientUsesMultiMonitor || !_loggedIn || _client is null || _disposed || !IsVisible || !_remoteDisplayReady || _operationStatus is not null ||
             !DisplayPolicy.AllowsRemoteResize(Profile) || !TryGetStableViewport(out var viewport))
             return;
 
@@ -458,6 +571,11 @@ public sealed class SessionView : UserControl, IDisposable
     internal void ShowRemoteDisplay()
     {
         TraceDisplay("Transport connected");
+        // FullScreen's getter reports the current state, not the pre-connect
+        // request. Apply it again once the transport exists, with our container
+        // already covering the physical monitor layout.
+        if (_clientUsesMultiMonitor && _client?.Connected == 1 && !_client.FullScreen)
+            _client.FullScreen = true;
         // A transport can connect while the guest is still rebooting, then drop
         // again before login. Keep recovery armed until the session is usable.
         if (_loggedIn || Profile.Kind == ConnectionKind.HyperV && !Profile.EnhancedSession)
@@ -478,9 +596,11 @@ public sealed class SessionView : UserControl, IDisposable
         // unchanged dimensions back into another native resize/refresh cycle.
         if (size == _desktop) return;
         _desktop = size;
+        if (IsDisplayTransitionCovered) _transitionLastResize = Environment.TickCount64;
         // The server can start at a different resolution than we requested.
         // Do not let that stale request suppress fitting the final viewport.
-        if (_lastRequestedSize != size) _lastRequestedSize = null;
+        if (_lastRequestedSize is not { } requested || !MatchesReportedDesktop(requested, size))
+            _lastRequestedSize = null;
         LayoutClient();
         RefreshDisplay();
         if (_loggedIn) SetStatus(DisplayDescription());
@@ -575,6 +695,7 @@ public sealed class SessionView : UserControl, IDisposable
         string text = $"{Profile.Name}\n\n{Status}";
         if (_statusScreen.Text != text) _statusScreen.Text = text;
         bool showStatus = !_remoteDisplayReady || _operationStatus is not null;
+        if (showStatus) EndDisplayTransition();
         if (_showingStatus != showStatus)
         {
             _showingStatus = showStatus;
@@ -609,6 +730,8 @@ public sealed class SessionView : UserControl, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        EndDisplayTransition();
+        _transitionTimer.Tick -= CheckDisplayTransition;
         StopRestartReconnect();
         _restartTimer.Tick -= RetryAfterRestart;
         _password.Dispose();

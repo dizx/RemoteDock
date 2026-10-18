@@ -18,6 +18,7 @@ internal static class SessionResizeChecks
         await CheckRestoredSessionSizes(window);
         await CheckFocusReconnectSize(window);
         await CheckPreLoginResize(window);
+        await CheckDisplayTransition(window);
         var session = window.AddSession(new() { Name = "Resize probe", Host = "resize.invalid" }, "", connect: false);
         var requests = new List<PixelSize>();
         session.UpdateDisplaySettings = (size, _) => requests.Add(size);
@@ -73,10 +74,70 @@ internal static class SessionResizeChecks
         }
     }
 
+    private static async Task CheckDisplayTransition(MainWindow window)
+    {
+        var session = window.AddSession(new() { Name = "Transition cover", Host = "transition.invalid", DisplayMode = DisplayMode.MatchPanel }, "", connect: false);
+        double originalWidth = window.Width;
+        try
+        {
+            await Task.Delay(200);
+            var panel = ((WindowsFormsHost)session.Content).Child;
+            var client = panel.Controls.OfType<System.Windows.Forms.AxHost>().Single();
+            var cover = panel.Controls.OfType<System.Windows.Forms.Panel>().Single();
+            typeof(SessionView).GetField("_loggedIn", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(session, true);
+            session.UpdateDisplaySettings = (_, _) => { };
+            session.ShowRemoteDisplay();
+            session.RemoteDesktopSizeChanged(640, 480);
+            await Task.Delay(200);
+            session.BeginDisplayTransition();
+            Require(cover.Visible && cover.BackColor == System.Drawing.Color.Black &&
+                cover.Bounds == panel.ClientRectangle && panel.Controls.GetChildIndex(cover) < panel.Controls.GetChildIndex(client) && client.Visible,
+                "Transition cover did not cover the native surface while leaving the RDP control active.");
+            await Task.Delay(600);
+            Require(session.IsDisplayTransitionCovered, "Cover disappeared before the guest confirmed its new resolution.");
+            session.RemoteDesktopSizeChanged(panel.ClientSize.Width, panel.ClientSize.Height);
+            await Task.Delay(350);
+            Require(!session.IsDisplayTransitionCovered && !cover.Visible, "Confirmed guest resolution did not remove the cover.");
+
+            window.Width += 100;
+            await Task.Delay(100);
+            Require(session.IsDisplayTransitionCovered && cover.Visible && cover.Bounds == panel.ClientRectangle,
+                "Resizing the window did not automatically cover the complete native viewport.");
+            for (int i = 0; i < 4; i++)
+            {
+                window.Width += 10;
+                await Task.Delay(450);
+                Require(session.IsDisplayTransitionCovered && cover.Bounds == panel.ClientRectangle,
+                    "The resize cover expired or left an exposed strip during continued resizing.");
+            }
+            session.RemoteDesktopSizeChanged(panel.ClientSize.Width, panel.ClientSize.Height);
+            await Task.Delay(350);
+            Require(!session.IsDisplayTransitionCovered && !cover.Visible,
+                "The resize cover did not clear after the final guest size was confirmed.");
+
+            session.RemoteDesktopSizeChanged(640, 480);
+            session.BeginDisplayTransition();
+            await Task.Delay(1850);
+            Require(!session.IsDisplayTransitionCovered && !cover.Visible, "Missing guest confirmation left the black cover stuck.");
+
+            session.BeginDisplayTransition();
+            session.ReportOperation("Saving state…");
+            Require(!session.IsDisplayTransitionCovered && !cover.Visible, "Transition cover concealed VM status.");
+        }
+        finally
+        {
+            await window.RequestCloseSessionAsync(session);
+            window.Width = originalWidth;
+        }
+        Require(!session.IsDisplayTransitionCovered, "Closing the session left its transition timer running.");
+        Console.WriteLine("PASS: native black cover keeps RDP active, waits for confirmed resolution, times out, and yields to status/close.");
+    }
+
     private static async Task CheckFocusReconnectSize(MainWindow window)
     {
         var session = window.AddSession(new() { Name = "Focus reconnect size", Host = "focus-size.invalid", DisplayMode = DisplayMode.MatchPanel }, "", connect: false);
         var focus = (Button)window.FindName("FocusButton");
+        double originalWidth = window.Width;
         focus.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         try
         {
@@ -109,9 +170,23 @@ internal static class SessionResizeChecks
             await Task.Delay(100);
             Require(!(bool)client.AdvancedSettings2.SmartSizing && client.Bounds == panel.ClientRectangle,
                 "Match Panel retained fallback scaling after the guest reported the full resolution.");
+            // Reproduce the live guest rounding 3807 requested pixels down to 3806.
+            if ((panel.ClientSize.Width & 1) == 0)
+            {
+                window.Width += 3 / System.Windows.Media.VisualTreeHelper.GetDpi(window).DpiScaleX;
+                await Task.Delay(500);
+            }
+            Require((panel.ClientSize.Width & 1) != 0, "Rounded-width regression requires an odd viewport width.");
+            int repeatedRequests = 0;
+            session.UpdateDisplaySettings = (_, _) => repeatedRequests++;
+            session.RemoteDesktopSizeChanged(panel.ClientSize.Width - 1, panel.ClientSize.Height);
+            await Task.Delay(500);
+            Require(repeatedRequests == 0 && !(bool)client.AdvancedSettings2.SmartSizing,
+                "A guest-rounded odd width triggered another remote resize or retained fallback fitting.");
         }
         finally
         {
+            window.Width = originalWidth;
             focus.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             await window.RequestCloseSessionAsync(session);
         }

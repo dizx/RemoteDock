@@ -140,6 +140,13 @@ internal static class Program
                     app.Shutdown(0);
                     return;
                 }
+                if (args.Contains("--multi-monitor-only"))
+                {
+                    await MultiMonitorChecks.Run(window);
+                    window.Close();
+                    app.Shutdown(0);
+                    return;
+                }
                 if (args.Contains("--hyperv-only"))
                 {
                     await HyperVPickerChecks.Run();

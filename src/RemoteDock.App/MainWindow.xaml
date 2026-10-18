@@ -100,6 +100,7 @@
           <Button x:Name="ReconnectButton" Content="Reconnect" IsEnabled="False" Click="Reconnect_Click" ToolTip="Reconnect the active session with its credentials" />
           <Button x:Name="FocusButton" Content="Focus Mode" Click="Focus_Click" ToolTip="Hide navigation and tabs · Ctrl+Shift+F when local UI has focus" />
           <Button x:Name="FullscreenButton" Content="Full screen" Click="Fullscreen_Click" ToolTip="F11 when local UI has focus" />
+          <Button x:Name="MultiMonitorButton" Content="Use all monitors" IsEnabled="False" Click="MultiMonitor_Click" ToolTip="Extend this remote session across all monitors (reconnects). RDP or Hyper-V Enhanced Session required." />
           <Button x:Name="AboutButton" Content="About ⓘ" Click="About_Click" ToolTip="About RemoteDock" AutomationProperties.Name="About RemoteDock" />
         </StackPanel>
         <StackPanel Orientation="Horizontal">
@@ -165,7 +166,8 @@
         </StackPanel>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0" WindowChrome.IsHitTestVisibleInChrome="True">
           <Button x:Name="ExitFocusButton" Content="Exit Focus" Click="Focus_Click" Padding="8,2" />
-          <Button Content="Full screen / restore" Click="Fullscreen_Click" Padding="8,2" />
+          <Button x:Name="FocusFullscreenButton" Content="Full screen / restore" Click="Fullscreen_Click" Padding="8,2" />
+          <Button x:Name="FocusMultiMonitorButton" Content="Exit all monitors" Visibility="Collapsed" IsEnabled="False" Click="MultiMonitor_Click" Padding="8,2" ToolTip="Return to the single-monitor window (reconnects)" />
         </StackPanel>
         <Border DockPanel.Dock="Right" Width="40" Background="Transparent" />
         <StackPanel x:Name="FocusBrand" DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,16,0">

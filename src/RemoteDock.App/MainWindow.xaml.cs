@@ -62,6 +62,7 @@ public partial class MainWindow : Window
         RefreshConnections();
         UpdateSidebarLayout();
         ContentRendered += RestorePreviousConnections;
+        Closed += (_, _) => CloseMultiMonitorToolbar();
     }
 
     private async void RestorePreviousConnections(object? sender, EventArgs e)
@@ -463,9 +464,11 @@ public partial class MainWindow : Window
     {
         if (ActivateExistingSession(profile) is { } existing) return existing;
         var session = SessionFactory(profile, password, connect, deferConnect);
+        session.SetMultiMonitor(_multiMonitor, reconnect: false);
         session.StatusChanged += Session_StatusChanged;
         session.ConnectionEstablished += Session_ConnectionEstablished;
         session.RemoteSessionEnded += Session_RemoteSessionEnded;
+        session.LeaveMultiMonitorRequested += Session_LeaveMultiMonitorRequested;
         var header = new StackPanel { Orientation = Orientation.Horizontal };
         header.Children.Add(new TextBlock { Text = profile.Name.ReplaceLineEndings(" "), TextWrapping = TextWrapping.NoWrap,
             TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 200, ToolTip = profile.Name,
@@ -512,6 +515,16 @@ public partial class MainWindow : Window
     private void Tab_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (SessionSurface is null) return;
+        if (!_closing)
+        {
+            if (_multiMonitor && ActiveSession is null && Tabs.Items.Count > 0)
+            {
+                Tabs.SelectedIndex = 0;
+                return;
+            }
+            if (_multiMonitor && ActiveSession is not { SupportsMultiMonitor: true }) SetMultiMonitor(false);
+            ActiveSession?.SetMultiMonitor(_multiMonitor);
+        }
         foreach (var session in SessionSurface.Children.OfType<SessionView>()) session.Visibility = session == ActiveSession ? Visibility.Visible : Visibility.Collapsed;
         ActiveSession?.Activate();
         UpdateStatus();
@@ -543,6 +556,8 @@ public partial class MainWindow : Window
         SetStatusText(ActiveSession?.Status ?? "Ready");
         Title = ActiveSession is { } active ? $"{active.Profile.Name} — RemoteDock" : "RemoteDock";
         ReconnectButton.IsEnabled = ActiveSession is not null;
+        MultiMonitorButton.IsEnabled = !_focusMode && ActiveSession is { SupportsMultiMonitor: true };
+        FocusMultiMonitorButton.IsEnabled = _multiMonitor;
     }
 
     private void SetStatusText(string status)
@@ -574,6 +589,7 @@ public partial class MainWindow : Window
         session.StatusChanged -= Session_StatusChanged;
         session.ConnectionEstablished -= Session_ConnectionEstablished;
         session.RemoteSessionEnded -= Session_RemoteSessionEnded;
+        session.LeaveMultiMonitorRequested -= Session_LeaveMultiMonitorRequested;
         session.Dispose();
         SessionSurface.Children.Remove(session);
         var focusButton = FocusSessionButtons.Children.OfType<Button>().FirstOrDefault(b => ReferenceEquals(b.Tag, tab));
@@ -642,15 +658,16 @@ public partial class MainWindow : Window
             SidebarDockHost.Content = Sidebar;
             Sidebar.Width = Sidebar.Height = double.NaN;
         }
-        Sidebar.Visibility = _focusMode ? Visibility.Collapsed : Visibility.Visible;
-        SidebarDockHost.Visibility = _focusMode || _catalog.AutoHideConnections ? Visibility.Collapsed : Visibility.Visible;
-        SidebarRail.Visibility = !_focusMode && _catalog.AutoHideConnections ? Visibility.Visible : Visibility.Collapsed;
-        SidebarColumn.Width = new GridLength(_focusMode ? 0 : _catalog.AutoHideConnections ? 22 : 240);
+        bool hideNavigation = _focusMode || _fullScreen;
+        Sidebar.Visibility = hideNavigation ? Visibility.Collapsed : Visibility.Visible;
+        SidebarDockHost.Visibility = hideNavigation || _catalog.AutoHideConnections ? Visibility.Collapsed : Visibility.Visible;
+        SidebarRail.Visibility = !hideNavigation && _catalog.AutoHideConnections ? Visibility.Visible : Visibility.Collapsed;
+        SidebarColumn.Width = new GridLength(hideNavigation ? 0 : _catalog.AutoHideConnections ? 22 : 240);
     }
 
     private void RevealSidebar(object sender, RoutedEventArgs e)
     {
-        if (!_catalog.AutoHideConnections || _focusMode) return;
+        if (!_catalog.AutoHideConnections || _focusMode || _fullScreen) return;
         _sidebarHideTimer.Stop();
         Sidebar.Height = Math.Max(200, Workspace.ActualHeight);
         SidebarPopup.IsOpen = true;
@@ -684,6 +701,8 @@ public partial class MainWindow : Window
     private void Focus_Click(object sender, RoutedEventArgs e) => ToggleFocus();
     private void ToggleFocus()
     {
+        if (_fullScreen) return;
+        ActiveSession?.BeginDisplayTransition();
         _focusMode = !_focusMode;
         Toolbar.Visibility = Tabs.Visibility = StatusBar.Visibility = _focusMode ? Visibility.Collapsed : Visibility.Visible;
         UpdateFocusChrome();
@@ -697,6 +716,7 @@ public partial class MainWindow : Window
     private void Fullscreen_Click(object sender, RoutedEventArgs e) => ToggleFullscreen();
     private void ToggleFullscreen()
     {
+        if (_multiMonitor) { SetMultiMonitor(false); return; }
         if (!_fullScreen)
         {
             System.Windows.Shell.WindowChrome.SetWindowChrome(this, null);
@@ -715,7 +735,9 @@ public partial class MainWindow : Window
             WindowState = _previousState;
         }
         _fullScreen = !_fullScreen;
+        Toolbar.Visibility = Tabs.Visibility = StatusBar.Visibility = _focusMode || _fullScreen ? Visibility.Collapsed : Visibility.Visible;
         UpdateFocusChrome();
+        UpdateSidebarLayout();
         ActiveSession?.RefreshDisplay();
     }
 
@@ -735,7 +757,7 @@ public partial class MainWindow : Window
 
     private void RevealFocusSession()
     {
-        if (!_focusMode) return;
+        if (!_focusMode && !_fullScreen) return;
         Dispatcher.BeginInvoke(new Action(() => FocusSessionButtons.Children.OfType<Button>()
             .FirstOrDefault(b => ReferenceEquals(b.Tag, Tabs.SelectedItem))?.BringIntoView()), DispatcherPriority.Loaded);
     }
