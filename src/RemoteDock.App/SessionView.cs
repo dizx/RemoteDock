@@ -30,6 +30,8 @@ public sealed class SessionView : UserControl, IDisposable
         AccessibleName = "Session status", Cursor = Forms.Cursors.Default
     };
     private readonly DispatcherTimer _resizeTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
+    private readonly DispatcherTimer _restartTimer = new() { Interval = TimeSpan.FromSeconds(5) };
+    private DateTimeOffset? _restartDeadline;
     private AxMsRdpClient9NotSafeForScripting? _client;
     private PixelSize _desktop;
     private PixelSize? _lastRequestedSize;
@@ -78,6 +80,7 @@ public sealed class SessionView : UserControl, IDisposable
         _panel.Resize += PanelResized;
         _panel.DpiChangedAfterParent += PanelResized;
         _resizeTimer.Tick += ResizeRemoteDesktop;
+        _restartTimer.Tick += RetryAfterRestart;
         IsVisibleChanged += SessionVisibilityChanged;
         Loaded += OnLoaded;
     }
@@ -121,6 +124,7 @@ public sealed class SessionView : UserControl, IDisposable
             {
                 if (_client != client || _disposed) return;
                 _loggedIn = true;
+                StopRestartReconnect();
                 TraceDisplay("Login complete");
                 _remoteDisplayReady = true;
                 SetStatus(DisplayDescription());
@@ -133,7 +137,12 @@ public sealed class SessionView : UserControl, IDisposable
                 string reason = _client.GetErrorDescription((uint)args.discReason, (uint)_client.ExtendedDisconnectReason);
                 HandleDisconnected($"Disconnected: {reason} ({args.discReason})", args.discReason, (int)_client.ExtendedDisconnectReason);
             };
-            _client.OnFatalError += (_, args) => { if (_client == client) ShowSessionStatus($"RDP error {args.errorCode}"); };
+            _client.OnFatalError += (_, args) =>
+            {
+                if (_client != client) return;
+                StopRestartReconnect();
+                ShowSessionStatus($"RDP error {args.errorCode}");
+            };
             _client.OnRemoteDesktopSizeChange += (_, args) =>
             {
                 if (_client == client) RemoteDesktopSizeChanged(args.width, args.height);
@@ -156,7 +165,7 @@ public sealed class SessionView : UserControl, IDisposable
             _client.AdvancedSettings2.RDPPort = Profile.Port;
             _client.AdvancedSettings2.SmartSizing = Profile.DisplayMode == DisplayMode.ScaledFit;
             var extended = (MSTSCLib.IMsRdpExtendedSettings)_client.GetOcx()!;
-            if (Profile.DisplayMode == DisplayMode.ScaledFit)
+            if (Profile.DisplayMode is DisplayMode.ScaledFit or DisplayMode.MatchPanel)
             {
                 object enableZoom = true;
                 extended.set_Property("EnableZoom", ref enableZoom);
@@ -219,6 +228,12 @@ public sealed class SessionView : UserControl, IDisposable
 
     public void Reconnect(ConnectionProfile settings, string? savedPassword = null)
     {
+        StopRestartReconnect();
+        ReconnectCore(settings, savedPassword);
+    }
+
+    private void ReconnectCore(ConnectionProfile settings, string? savedPassword = null)
+    {
         if (_disposed || _reconnectQueued || _client?.Connected == 2) return;
         settings.Validate();
         if (savedPassword is not null) RememberPassword(savedPassword);
@@ -237,7 +252,7 @@ public sealed class SessionView : UserControl, IDisposable
         {
             _reconnectQueued = false;
             if (!_disposed) InitializeClient();
-        }), DispatcherPriority.Background);
+        }), DispatcherPriority.ContextIdle);
     }
 
     private void DisposeClient()
@@ -256,6 +271,11 @@ public sealed class SessionView : UserControl, IDisposable
     }
 
     private PixelSize PanelSize => new(_panel.ClientSize.Width, _panel.ClientSize.Height);
+
+    // Login completion and an accepted resize request do not mean the guest has
+    // changed resolution. Fit its reported desktop until the size actually matches.
+    private bool FitPendingDesktop => Profile.DisplayMode == DisplayMode.MatchPanel &&
+        (_desktop.Width != PanelSize.Width || _desktop.Height != PanelSize.Height);
 
     private string DisplayDescription()
     {
@@ -291,7 +311,7 @@ public sealed class SessionView : UserControl, IDisposable
         }
         else
         {
-            var bounds = Profile.DisplayMode == DisplayMode.ScaledFit
+            var bounds = Profile.DisplayMode == DisplayMode.ScaledFit || FitPendingDesktop
                 ? DisplayPolicy.Fit(_desktop, panel)
                 : new PixelRect(0, 0, panel.Width, panel.Height);
             _client.Bounds = new Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height);
@@ -357,9 +377,10 @@ public sealed class SessionView : UserControl, IDisposable
             try
             {
                 LayoutClient();
-                if (Profile.DisplayMode == DisplayMode.ScaledFit)
+                bool smartSizing = Profile.DisplayMode == DisplayMode.ScaledFit || FitPendingDesktop;
+                _client.AdvancedSettings2.SmartSizing = smartSizing;
+                if (smartSizing)
                 {
-                    _client.AdvancedSettings2.SmartSizing = true;
                     // A remote resolution change can leave the native renderer at its old size
                     // even when the outer control already has the right bounds. Reproduce the
                     // resize that repairs it, without changing the host or remote resolution.
@@ -437,6 +458,10 @@ public sealed class SessionView : UserControl, IDisposable
     internal void ShowRemoteDisplay()
     {
         TraceDisplay("Transport connected");
+        // A transport can connect while the guest is still rebooting, then drop
+        // again before login. Keep recovery armed until the session is usable.
+        if (_loggedIn || Profile.Kind == ConnectionKind.HyperV && !Profile.EnhancedSession)
+            StopRestartReconnect();
         // Reveal on transport connection, before login, so basic Hyper-V boot/login screens remain usable.
         _remoteDisplayReady = true;
         _preserveOperationResult = false;
@@ -464,6 +489,7 @@ public sealed class SessionView : UserControl, IDisposable
     internal void ReportOperation(string status)
     {
         if (_disposed) return;
+        StopRestartReconnect();
         _operationStatus = status;
         _preserveOperationResult = false;
         SetStatus(status);
@@ -487,6 +513,18 @@ public sealed class SessionView : UserControl, IDisposable
         _loggedIn = false;
         _remoteDisplayReady = false;
         _resizeTimer.Stop();
+        // Extended reason 26 is a server restart (25 is shutdown). This needs a
+        // fresh connection: the ActiveX auto-reconnect cookie cannot survive a reboot.
+        if (_operationStatus is null && !_preserveOperationResult && !_reconnectQueued &&
+            (extendedReason == 26 || (_restartDeadline is not null &&
+                extendedReason is 0 or 1 or 7 && disconnectReason is not (1 or 2))))
+        {
+            _restartDeadline ??= DateTimeOffset.UtcNow.AddMinutes(5);
+            ShowSessionStatus("Reconnecting…");
+            _restartTimer.Start();
+            return;
+        }
+        StopRestartReconnect();
         // 2 is remote disconnection by user; extended 2/12 are API/user logoff.
         // VM management can also end the transport: retain its progress/result screen.
         if ((disconnectReason == 2 || extendedReason is 2 or 12) &&
@@ -505,6 +543,29 @@ public sealed class SessionView : UserControl, IDisposable
         }
         // Saving the VM can disconnect its console before or after the management job completes.
         SetStatus(_preserveOperationResult ? Status : status);
+    }
+
+    private void RetryAfterRestart(object? sender, EventArgs e)
+    {
+        if (_disposed || _restartDeadline is null) { StopRestartReconnect(); return; }
+        // Leave a connected login screen available, even if the user takes longer
+        // than the recovery deadline to sign in.
+        if (_client?.Connected == 1) return;
+        if (DateTimeOffset.UtcNow >= _restartDeadline)
+        {
+            StopRestartReconnect();
+            DisposeClient();
+            ShowSessionStatus("Automatic reconnect timed out after 5 minutes.\nUse Reconnect to try again.");
+            return;
+        }
+        if (_reconnectQueued || (_client is not null && _client.Connected != 0)) return;
+        ReconnectCore(Profile);
+    }
+
+    private void StopRestartReconnect()
+    {
+        _restartTimer.Stop();
+        _restartDeadline = null;
     }
 
     private void SetStatus(string status)
@@ -548,6 +609,8 @@ public sealed class SessionView : UserControl, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        StopRestartReconnect();
+        _restartTimer.Tick -= RetryAfterRestart;
         _password.Dispose();
         _resizeTimer.Stop();
         _resizeTimer.Tick -= ResizeRemoteDesktop;

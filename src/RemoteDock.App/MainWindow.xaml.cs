@@ -480,6 +480,8 @@ public partial class MainWindow : Window
         AddVmMenuItems(tab.ContextMenu, () => session.Profile);
         var focusButton = new Button { Tag = tab, Style = (Style)FindResource("FocusSessionButton") };
         focusButton.Click += FocusSession_Click;
+        focusButton.MouseDoubleClick += FocusSession_MouseDoubleClick;
+        focusButton.ToolTip = "Double-click to reconnect";
         FocusSessionButtons.Children.Add(focusButton);
         SessionSurface.Children.Add(session);
         Tabs.Items.Add(tab);
@@ -721,6 +723,14 @@ public partial class MainWindow : Window
     {
         Tabs.SelectedItem = ((Button)sender).Tag;
         ActiveSession?.Activate();
+    }
+
+    private void FocusSession_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left) return;
+        Tabs.SelectedItem = ((Button)sender).Tag;
+        e.Handled = true;
+        Reconnect_Click(sender, e);
     }
 
     private void RevealFocusSession()

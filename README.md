@@ -54,7 +54,7 @@ restore list intact.
 
 ## Get connected
 
-1. Run **`RemoteDock-1.0.19-win-x64-Setup.exe`** and choose an all-users or
+1. Run **`RemoteDock-1.0.22-win-x64-Setup.exe`** and choose an all-users or
    current-user installation. The installer includes the .NET runtime.
 2. Add an **RDP** or **Hyper-V** connection, or import your existing connections.
 3. For Hyper-V, enter the host, click **Load VMs**, and select a VM by name.
@@ -157,7 +157,7 @@ The script generates the RDP wrappers, publishes a self-contained Release build
 with the .NET runtime, and compiles `installer/RemoteDock.iss`. For a custom Inno
 Setup location, pass `-IsccPath "C:\path\to\ISCC.exe"`.
 
-Output: `artifacts/installer/RemoteDock-1.0.19-win-x64-Setup.exe`.
+Output: `artifacts/installer/RemoteDock-1.0.22-win-x64-Setup.exe`.
 Version metadata is defined in `Directory.Build.props`.
 The installed application and its shortcuts use `RemoteDock.exe`.
 
